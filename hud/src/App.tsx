@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import { suggestionFromFixture, type Suggestion } from "./suggestion";
 import "./App.css";
 
@@ -17,11 +18,31 @@ export default function App() {
       return;
     }
 
+    let live = false;
+    let unlisten: (() => void) | undefined;
+    listen<Suggestion>("suggestion", (event) => {
+      live = true;
+      setError(null);
+      setSuggestion(event.payload);
+    }).then((stop) => {
+      unlisten = stop;
+    });
+
     invoke<Suggestion>("read_suggestion")
-      .then(setSuggestion)
+      .then((value) => {
+        if (!live) {
+          setSuggestion(value);
+        }
+      })
       .catch((reason: unknown) => {
-        setError(reason instanceof Error ? reason.message : String(reason));
+        if (!live) {
+          setError(reason instanceof Error ? reason.message : String(reason));
+        }
       });
+
+    return () => {
+      unlisten?.();
+    };
   }, []);
 
   const title = suggestion?.title ?? (error ? "Could not read the suggestion" : "Reading suggestion");
@@ -30,8 +51,8 @@ export default function App() {
     <main className="hud">
       <p className="kicker">Aura · {suggestion?.source ?? "waiting"}</p>
       <h1>{title}</h1>
-      {suggestion && <p className="detail">{suggestion.detail}</p>}
-      {suggestion && <p className="reason">{suggestion.reason}</p>}
+      {suggestion?.detail && <p className="detail">{suggestion.detail}</p>}
+      {suggestion?.reason && <p className="reason">{suggestion.reason}</p>}
       {error && <p className="reason">{error}</p>}
       <p className="hint">Ctrl+Alt+Space shows and hides this panel</p>
     </main>

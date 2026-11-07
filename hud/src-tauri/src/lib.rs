@@ -1,8 +1,11 @@
+use std::io::{BufRead, BufReader};
 use std::path::PathBuf;
+use std::thread;
+use std::time::Duration;
 
-use tauri::Manager;
+use tauri::{Emitter, Manager};
 
-#[derive(serde::Serialize)]
+#[derive(Clone, serde::Serialize)]
 struct SuggestionView {
     title: String,
     detail: String,
@@ -72,6 +75,60 @@ fn place_top_right(window: &tauri::WebviewWindow) {
     let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
 }
 
+fn text_field(value: &serde_json::Value, key: &str) -> String {
+    value
+        .get(key)
+        .and_then(|item| item.as_str())
+        .unwrap_or("")
+        .to_string()
+}
+
+fn suggestion_from_line(line: &str) -> Option<SuggestionView> {
+    let value: serde_json::Value = serde_json::from_str(line).ok()?;
+    let Some(suggestion) = value.pointer("/payload/suggestion") else {
+        return Some(SuggestionView {
+            title: "No suggestion for this context".to_string(),
+            detail: String::new(),
+            reason: String::new(),
+            source: "none".to_string(),
+            kind: "none".to_string(),
+        });
+    };
+    if suggestion.is_null() {
+        return Some(SuggestionView {
+            title: "No suggestion for this context".to_string(),
+            detail: String::new(),
+            reason: String::new(),
+            source: "none".to_string(),
+            kind: "none".to_string(),
+        });
+    }
+    Some(SuggestionView {
+        title: text_field(suggestion, "title"),
+        detail: text_field(suggestion, "detail"),
+        reason: text_field(suggestion, "reason"),
+        source: text_field(suggestion, "source"),
+        kind: text_field(suggestion, "kind"),
+    })
+}
+
+fn listen_for_snapshots(app: tauri::AppHandle) {
+    loop {
+        match std::fs::File::open(r"\\.\pipe\aura") {
+            Ok(file) => {
+                for line in BufReader::new(file).lines() {
+                    let Ok(line) = line else { break };
+                    let Some(suggestion) = suggestion_from_line(&line) else {
+                        continue;
+                    };
+                    let _ = app.emit("suggestion", suggestion);
+                }
+            }
+            Err(_) => thread::sleep(Duration::from_millis(400)),
+        }
+    }
+}
+
 fn toggle_window(app: &tauri::AppHandle) {
     let Some(window) = app.get_webview_window("main") else {
         return;
@@ -95,6 +152,8 @@ pub fn run() {
             if let Some(window) = app.get_webview_window("main") {
                 place_top_right(&window);
             }
+            let handle = app.handle().clone();
+            thread::spawn(move || listen_for_snapshots(handle));
 
             #[cfg(desktop)]
             {
