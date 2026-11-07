@@ -1,10 +1,12 @@
 import json
+import re
 from pathlib import Path
 from typing import Any
 
 from context.core.models import ContextSnapshot
 
 ROOT = Path(__file__).resolve().parents[1]
+URL_PATTERN = re.compile(r"(?:https?://|www\.)[^\s<>\"']+", re.IGNORECASE)
 
 
 def load_json(path: Path) -> dict[str, Any]:
@@ -49,6 +51,20 @@ def first_match(
     config: dict[str, Any],
 ) -> dict[str, str] | None:
     """Return the suggestion for the first rule whose clauses all match."""
+
+    website = URL_PATTERN.search(snapshot.note_body or "")
+    if website:
+        target = website.group(0).rstrip(".,;:!?)]")
+        if target.casefold().startswith("www."):
+            target = f"https://{target}"
+        return {
+            "kind": "open_url",
+            "title": "Open this website",
+            "target": target,
+            "detail": target,
+            "reason": "A website link appears in your note.",
+            "source": "note",
+        }
 
     for rule in rules_doc.get("rules", []):
         when = rule.get("when") or {}
