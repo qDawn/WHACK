@@ -1,0 +1,31 @@
+{
+  "rules": [
+    {
+      "id": "godot-from-note",
+      "when": { "noteContains": "platformer" },
+      "suggest": {
+        "kind": "open_godot",
+        "title": "Open the Godot project",
+        "target": "${godotProject}"
+      }
+    },
+    {
+      "id": "terminal-from-clipboard",
+      "when": { "clipboardContains": "${gitRepo}" },
+      "suggest": {
+        "kind": "open_terminal",
+        "title": "Open a terminal in the repo",
+        "target": "${gitRepo}"
+      }
+    },
+    {
+      "id": "discord-from-note",
+      "when": { "noteContains": "discord" },
+      "suggest": {
+        "kind": "focus_discord",
+        "title": "Focus Discord",
+        "target": "Discord"
+      }
+    }
+  ]
+}

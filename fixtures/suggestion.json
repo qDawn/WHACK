@@ -1,0 +1,19 @@
+{
+  "protocol": "ag-ui",
+  "version": "1.0",
+  "type": "STATE_SNAPSHOT",
+  "runId": "demo-1",
+  "payload": {
+    "process": "Notepad.exe",
+    "title": "aura-scratch.md",
+    "clipboardEnabled": true,
+    "noteBody": "keep going on the platformer",
+    "suggestion": {
+      "kind": "open_godot",
+      "title": "Open the Godot project",
+      "detail": "C:\\Users\\nggro\\games\\platformer\\project.godot",
+      "reason": "The scratchpad names the platformer.",
+      "source": "rule"
+    }
+  }
+}
