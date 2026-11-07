@@ -15,6 +15,7 @@ from context.collectors.scratchpad import ScratchpadCollector
 from context.core.events import ContextEvent
 from context.core.manager import HUD_EVENT_TYPES, ContextManager
 from context.core.models import ContextSnapshot
+from memory.focus_store import FocusStore, history_path
 
 
 class Outbox:
@@ -40,6 +41,29 @@ class Outbox:
             pending = self._controls
             self._controls = []
             return pending
+
+
+def open_history(config: dict) -> FocusStore | None:
+    try:
+        return FocusStore(history_path(config))
+    except Exception as exc:
+        print(f"History database unavailable: {exc}", flush=True)
+        return None
+
+
+def remember_window(store: FocusStore | None, event: ContextEvent) -> None:
+    """Record a foreground app. A database error must not stop collection."""
+
+    if store is None or event.event_type != "active_window_changed":
+        return
+    try:
+        store.record_window(
+            str(event.data.get("process_name") or ""),
+            str(event.data.get("window_title") or ""),
+            event.timestamp,
+        )
+    except Exception:
+        print("History write failed", flush=True)
 
 
 def main() -> None:
@@ -98,6 +122,7 @@ def main() -> None:
         outbox.set_snapshot(json.dumps(message, ensure_ascii=False))
 
     def on_event(event: ContextEvent, snapshot: ContextSnapshot) -> None:
+        remember_window(history, event)
         if event.event_type not in HUD_EVENT_TYPES:
             return
         suggestion = first_match(snapshot, rules, config)
@@ -126,6 +151,7 @@ def main() -> None:
         if advisor is not None:
             advisor.consider(snapshot)
 
+    history = open_history(config)
     manager.subscribe(on_event)
     if clipboard_enabled:
         manager.register_collector(ClipboardCollector())
@@ -153,6 +179,12 @@ def main() -> None:
             advisor.stop()
         collector.stop()
         manager.stop()
+        if history is not None:
+            try:
+                history.close_current()
+            except Exception:
+                print("History write failed", flush=True)
+            history.close()
 
 
 if __name__ == "__main__":
