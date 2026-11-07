@@ -35,6 +35,7 @@ function runningInTauri(): boolean {
 export default function App() {
   const [actions, setActions] = useState<ActionCard[]>(DEFAULT_ACTIONS);
   const [suggestedKind, setSuggestedKind] = useState<string | null>(null);
+  const [reason, setReason] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState("");
   const [noteLoaded, setNoteLoaded] = useState(false);
@@ -87,6 +88,7 @@ export default function App() {
         setActions(payload.actions);
       }
       setSuggestedKind(payload.suggestion?.kind ?? null);
+      setReason(payload.suggestion?.reason ?? null);
     }).then((stop) => {
       unlistenSnapshot = stop;
     });
@@ -130,6 +132,7 @@ export default function App() {
               <p className="kicker">{suggested ? "Suggested" : "Open"}</p>
               <h2>{action.title}</h2>
               <p className="detail">{action.detail}</p>
+              {suggested && reason ? <p className="reason">{reason}</p> : null}
               <button type="button" onClick={() => openAction(action.kind)}>
                 Open
               </button>

@@ -87,6 +87,12 @@ button {
   word-break: break-all;
 }
 
+.reason {
+  margin: 0;
+  color: #d7b899;
+  font-size: 14px;
+}
+
 .card button,
 .quick-note-trigger {
   margin-top: auto;

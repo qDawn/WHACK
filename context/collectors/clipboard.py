@@ -48,3 +48,18 @@ class ClipboardCollector(Collector):
             self.stop_event.wait(0.5)
 
         print("Clipboard thread stopped")
+
+    def start(self, publish):
+        if self.thread and self.thread.is_alive():
+            return
+
+        self.publish = publish
+        self.stop_event.clear()
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread.start()
+
+    def stop(self):
+        self.stop_event.set()
+        if self.thread and self.thread.is_alive():
+            self.thread.join()
+        self.thread = None

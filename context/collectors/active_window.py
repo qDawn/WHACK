@@ -3,7 +3,7 @@ import threading
 
 from context.collectors.base import Collector
 from context.core.events import ContextEvent
-from context.platform.linux.active_window import get_active_window
+from context.platform.detect import detect_platform
 
 
 class ActiveWindowCollector(Collector):
@@ -16,13 +16,18 @@ class ActiveWindowCollector(Collector):
         self.previous_window = None
         self.stop_event = threading.Event()
         self.thread = None
+        if detect_platform() == "windows":
+            from context.platform.windows.active_window import get_active_window
+        else:
+            from context.platform.linux.active_window import get_active_window
+        self._get_active_window = get_active_window
 
     def check_active_window(self):
         if not self.enabled:
             return
 
         try:
-            current_window = get_active_window()
+            current_window = self._get_active_window()
 
             if current_window is None:
                 return
@@ -56,4 +61,19 @@ class ActiveWindowCollector(Collector):
             self.stop_event.wait(self.poll_interval)
 
         print("Active window collector stopped")
+
+    def start(self, publish):
+        if self.thread and self.thread.is_alive():
+            return
+
+        self.publish = publish
+        self.stop_event.clear()
+        self.thread = threading.Thread(target=self._run, daemon=True)
+        self.thread.start()
+
+    def stop(self):
+        self.stop_event.set()
+        if self.thread and self.thread.is_alive():
+            self.thread.join()
+        self.thread = None
 

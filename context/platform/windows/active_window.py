@@ -40,13 +40,13 @@ def _bind() -> tuple[ctypes.WinDLL, ctypes.WinDLL]:
     return user32, kernel32
 
 
-def foreground_window() -> tuple[str, str]:
-    """Return (process_name, window_title) for the Windows foreground window."""
+def get_active_window() -> dict | None:
+    """Return the foreground window in the same shape as the Linux provider."""
 
     user32, kernel32 = _bind()
     hwnd = user32.GetForegroundWindow()
     if not hwnd:
-        return "", ""
+        return None
 
     length = user32.GetWindowTextLengthW(hwnd)
     title_buffer = ctypes.create_unicode_buffer(max(length, 0) + 1)
@@ -64,4 +64,18 @@ def foreground_window() -> tuple[str, str]:
                 process_name = Path(path_buffer.value).name
         finally:
             kernel32.CloseHandle(process)
-    return process_name, title_buffer.value
+    return {
+        "window_id": str(int(hwnd)),
+        "window_title": title_buffer.value,
+        "process_id": int(pid.value) if pid.value else None,
+        "process_name": process_name or None,
+    }
+
+
+def foreground_window() -> tuple[str, str]:
+    """Return (process_name, window_title) for the Windows foreground window."""
+
+    window = get_active_window()
+    if window is None:
+        return "", ""
+    return window.get("process_name") or "", window.get("window_title") or ""

@@ -64,7 +64,10 @@ class ContextManager:
             return
 
         for collector in self._collectors:
-            collector.stop()
+            try:
+                collector.stop()
+            except Exception as exc:
+                print(f"Collector stop failed: {exc}", flush=True)
 
         self._running = False
 
@@ -125,8 +128,8 @@ class ContextManager:
                 snap.clipboard_text = None
 
         elif event.event_type == "active_window_changed":
-            snap.process_name = str(data.get("process_name", ""))
-            snap.window_title = str(data.get("window_title", ""))
+            snap.process_name = str(data.get("process_name") or "")
+            snap.window_title = str(data.get("window_title") or "")
 
         elif event.event_type == "scratchpad_changed":
             snap.note_body = str(data.get("text", ""))

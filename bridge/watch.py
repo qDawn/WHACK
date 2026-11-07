@@ -5,6 +5,7 @@ import threading
 from pathlib import Path
 
 from bridge.launch import cards, load_entries, parse_action, perform
+from bridge.model import ModelAdvisor, model_settings
 from bridge.pipe_server import serve, serve_actions
 from bridge.rules import first_match, load_json, project_paths
 from bridge.state_snapshot import to_state_snapshot
@@ -54,6 +55,48 @@ def main() -> None:
     url_lock = threading.Lock()
     matched_url = {"value": ""}
 
+    def on_action(line: str) -> None:
+        try:
+            requested = json.loads(line).get("kind")
+            if requested == "open_url":
+                with url_lock:
+                    url = matched_url["value"]
+                perform("open_url", config, entries, target=url)
+                kind = "open_url"
+            else:
+                kind = parse_action(line, entries)
+                perform(kind, config, entries)
+        except Exception as exc:
+            print(f"Open failed: {exc}", flush=True)
+            outbox.push(json.dumps({"protocol": "aura", "type": "hud.error", "message": str(exc)}))
+            return
+        print(f"Opened {kind}", flush=True)
+        outbox.push(json.dumps({"protocol": "aura", "type": "hud.hide"}))
+
+    def on_model(snapshot: ContextSnapshot, suggestion: dict[str, str] | None) -> None:
+        if suggestion is None:
+            print("Model chose none", flush=True)
+            return
+        message = to_state_snapshot(snapshot, suggestion, actions=actions)
+        outbox.set_snapshot(json.dumps(message, ensure_ascii=False))
+        print(f"Suggested {suggestion['kind']} from model", flush=True)
+
+    advisor = None
+    if model_settings(config) is not None:
+        advisor = ModelAdvisor(config, entries, on_model)
+        advisor.start()
+        print("Model is on. It runs only when no rule matches.", flush=True)
+    else:
+        print("Model is off. Rules only.", flush=True)
+
+    def publish_match(
+        current: ContextSnapshot,
+        suggestion: dict[str, str] | None,
+        shown: list[dict[str, str]],
+    ) -> None:
+        message = to_state_snapshot(current, suggestion, actions=shown)
+        outbox.set_snapshot(json.dumps(message, ensure_ascii=False))
+
     def on_event(event: ContextEvent, snapshot: ContextSnapshot) -> None:
         if event.event_type not in HUD_EVENT_TYPES:
             return
@@ -72,30 +115,16 @@ def main() -> None:
             ]
         with url_lock:
             matched_url["value"] = url
-        message = to_state_snapshot(snapshot, suggestion, actions=shown)
-        outbox.set_snapshot(json.dumps(message, ensure_ascii=False))
-        if suggestion is None:
-            print("No card suggested", flush=True)
+        if suggestion is not None:
+            if advisor is not None:
+                advisor.cancel()
+            publish_match(snapshot, suggestion, shown)
+            print(f"Suggested {suggestion['kind']}", flush=True)
             return
-        print(f"Suggested {suggestion['kind']}", flush=True)
-
-    def on_action(line: str) -> None:
-        try:
-            requested = json.loads(line).get("kind")
-            if requested == "open_url":
-                with url_lock:
-                    url = matched_url["value"]
-                perform("open_url", config, entries, target=url)
-                kind = "open_url"
-            else:
-                kind = parse_action(line, entries)
-                perform(kind, config, entries)
-        except Exception as exc:
-            print(f"Open failed: {exc}", flush=True)
-            outbox.push(json.dumps({"protocol": "aura", "type": "hud.error", "message": str(exc)}))
-            return
-        print(f"Opened {kind}", flush=True)
-        outbox.push(json.dumps({"protocol": "aura", "type": "hud.hide"}))
+        publish_match(snapshot, None, actions)
+        print("No card suggested", flush=True)
+        if advisor is not None:
+            advisor.consider(snapshot)
 
     manager.subscribe(on_event)
     if clipboard_enabled:
@@ -120,6 +149,8 @@ def main() -> None:
         pass
     finally:
         stop.set()
+        if advisor is not None:
+            advisor.stop()
         collector.stop()
         manager.stop()
 
