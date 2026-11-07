@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { openPath, openUrl } from "@tauri-apps/plugin-opener";
-import { suggestionFromFixture, type Suggestion } from "./suggestion";
+import { suggestionFromFixture } from "./suggestion";
 import "./App.css";
 
 type TabCard = {
@@ -20,13 +20,7 @@ const sampleTabs: TabCard[] = [
   { id: 4, title: "Discord", subtitle: "team chat", accent: "#c4b5fd" },
   { id: 5, title: "Spotify", subtitle: "focus mix", accent: "#fca5a5" },
   { id: 6, title: "Notion", subtitle: "planning", accent: "#fcd34d" },
-import "./App.css";
-
-type ActionCard = {
-  kind: string;
-  title: string;
-  detail: string;
-};
+];
 
 type Suggestion = {
   kind: string;
@@ -38,14 +32,7 @@ type Suggestion = {
 
 type SnapshotPayload = {
   suggestion?: Suggestion | null;
-  actions?: ActionCard[];
 };
-
-const DEFAULT_ACTIONS: ActionCard[] = [
-  { kind: "open_godot", title: "Godot", detail: "Project path from aura.config.json" },
-  { kind: "open_terminal", title: "Terminal", detail: "Repo path from aura.config.json" },
-  { kind: "focus_discord", title: "Discord", detail: "Discord" },
-];
 
 function runningInTauri(): boolean {
   return "__TAURI_INTERNALS__" in window;
@@ -66,9 +53,9 @@ function suggestionFromNote(note: string, current: Suggestion | null): Suggestio
 
   if (/\b(discord)\b/i.test(note)) {
     return {
-      kind: "open_url",
+      kind: "focus_discord",
       title: "Open Discord",
-      detail: "discord://",
+      detail: "Discord",
       reason: "Your note mentions Discord.",
       source: "note",
     };
@@ -82,11 +69,11 @@ function suggestionFromNote(note: string, current: Suggestion | null): Suggestio
 }
 
 export default function App() {
-  const [actions, setActions] = useState<ActionCard[]>(DEFAULT_ACTIONS);
-  const [suggestedKind, setSuggestedKind] = useState<string | null>(null);
+  const [suggestion, setSuggestion] = useState<Suggestion | null>(() => suggestionFromFixture());
   const [error, setError] = useState<string | null>(null);
   const [note, setNote] = useState("");
-  const [noteLoaded, setNoteLoaded] = useState(false);
+  const [noteReady, setNoteReady] = useState(false);
+  const [noteWritable, setNoteWritable] = useState(false);
   const [noteOpen, setNoteOpen] = useState(false);
   const [saveState, setSaveState] = useState("Saved");
   const [actionError, setActionError] = useState<string | null>(null);
@@ -95,18 +82,25 @@ export default function App() {
   useEffect(() => {
     if (!runningInTauri()) {
       setNote(window.localStorage.getItem("aura.quick-note") ?? "");
-      setNoteLoaded(true);
+      setNoteWritable(true);
+      setNoteReady(true);
       return;
     }
 
     invoke<string>("read_scratchpad")
-      .then(setNote)
-      .catch((reason: unknown) => setError(reason instanceof Error ? reason.message : String(reason)))
-      .finally(() => setNoteLoaded(true));
+      .then((text) => {
+        setNote(text);
+        setNoteWritable(true);
+      })
+      .catch((reason: unknown) => {
+        setSaveState("Not saved");
+        setError(reason instanceof Error ? reason.message : String(reason));
+      })
+      .finally(() => setNoteReady(true));
   }, []);
 
   useEffect(() => {
-    if (!noteLoaded) return;
+    if (!noteReady || !noteWritable) return;
     window.localStorage.setItem("aura.quick-note", note);
     if (!runningInTauri()) return;
 
@@ -120,10 +114,15 @@ export default function App() {
         });
     }, 350);
     return () => window.clearTimeout(timer);
-  }, [note, noteLoaded]);
+  }, [note, noteReady, noteWritable]);
 
   useEffect(() => {
-    if (noteOpen) noteRef.current?.focus();
+    if (!noteOpen) return;
+    const editor = noteRef.current;
+    if (editor) {
+      editor.focus();
+      editor.setSelectionRange(editor.value.length, editor.value.length);
+    }
   }, [noteOpen]);
 
   useEffect(() => {
@@ -131,26 +130,37 @@ export default function App() {
       return;
     }
 
+    let cancelled = false;
+    let live = false;
     let unlistenSnapshot: (() => void) | undefined;
     let unlistenError: (() => void) | undefined;
 
     listen<SnapshotPayload>("snapshot", (event) => {
-      const payload = event.payload;
-      if (payload.actions && payload.actions.length > 0) {
-        setActions(payload.actions);
-      }
-      setSuggestedKind(payload.suggestion?.kind ?? null);
+      live = true;
+      setError(null);
+      setSuggestion(event.payload.suggestion ?? null);
     }).then((stop) => {
-      unlistenSnapshot = stop;
+      if (cancelled) stop();
+      else unlistenSnapshot = stop;
     });
 
     listen<string>("hud-error", (event) => {
       setError(event.payload);
     }).then((stop) => {
-      unlistenError = stop;
+      if (cancelled) stop();
+      else unlistenError = stop;
     });
 
+    invoke<Suggestion>("read_suggestion")
+      .then((value) => {
+        if (!live && !cancelled) setSuggestion(value);
+      })
+      .catch((reason: unknown) => {
+        if (!live && !cancelled) setError(reason instanceof Error ? reason.message : String(reason));
+      });
+
     return () => {
+      cancelled = true;
       unlistenSnapshot?.();
       unlistenError?.();
     };
@@ -164,17 +174,22 @@ export default function App() {
     if (!visibleSuggestion?.detail) return;
     setActionError(null);
     try {
-      if (/^(https?:\/\/|www\.)/i.test(visibleSuggestion.detail)) {
-        const target = visibleSuggestion.detail.startsWith("www.")
-          ? `https://${visibleSuggestion.detail}`
-          : visibleSuggestion.detail;
-        if (runningInTauri()) await openUrl(target);
-        else window.open(target, "_blank", "noopener,noreferrer");
-      } else if (runningInTauri()) {
-        if (visibleSuggestion.detail.includes("://")) await openUrl(visibleSuggestion.detail);
-        else await openPath(visibleSuggestion.detail);
+      if (!runningInTauri()) {
+        if (visibleSuggestion.kind === "open_url" && /^https?:\/\//i.test(visibleSuggestion.detail)) {
+          window.open(visibleSuggestion.detail, "_blank", "noopener,noreferrer");
+        } else {
+          setActionError("Opening applications is available in the Windows app.");
+        }
+        return;
+      }
+      if (visibleSuggestion.kind === "open_url") {
+        await openUrl(visibleSuggestion.detail);
+      } else if (["open_godot", "open_terminal", "focus_discord"].includes(visibleSuggestion.kind)) {
+        await invoke("open_action", { kind: visibleSuggestion.kind });
+      } else if (visibleSuggestion.detail.includes("://")) {
+        await openUrl(visibleSuggestion.detail);
       } else {
-        setActionError("Opening applications is available in the Windows app.");
+        await openPath(visibleSuggestion.detail);
       }
     } catch (reason) {
       setActionError(reason instanceof Error ? reason.message : String(reason));
@@ -236,63 +251,27 @@ export default function App() {
           <span aria-hidden="true">+</span> Quick note
         </button>
         <div className="tab-card-list">
-        {sampleTabs.map((tab, index) => (
-          <button
-            key={tab.id}
-            type="button"
-            className={`tab-card ${tab.active ? "is-active" : ""}`}
-            style={{
-              ["--accent" as string]: tab.accent,
-              ["--index" as string]: String(index),
-            }}
-          >
-            <div className="tab-card__visual">
-              <span className="tab-card__dot" />
-            </div>
-            <div className="tab-card__body">
-              <strong>{tab.title}</strong>
-              <small>{tab.subtitle}</small>
-            </div>
-          </button>
-        ))}
+          {sampleTabs.map((tab, index) => (
+            <button
+              key={tab.id}
+              type="button"
+              className={`tab-card ${tab.active ? "is-active" : ""}`}
+              style={{
+                ["--accent" as string]: tab.accent,
+                ["--index" as string]: String(index),
+              }}
+            >
+              <div className="tab-card__visual">
+                <span className="tab-card__dot" />
+              </div>
+              <div className="tab-card__body">
+                <strong>{tab.title}</strong>
+                <small>{tab.subtitle}</small>
+              </div>
+            </button>
+          ))}
         </div>
       </div>
-  async function openAction(kind: string) {
-    setError(null);
-    if (!runningInTauri()) {
-      setError("Open works from the Aura window, with the watcher running.");
-      return;
-    }
-    try {
-      await invoke("open_action", { kind });
-    } catch (reason: unknown) {
-      setError(reason instanceof Error ? reason.message : String(reason));
-    }
-  }
-
-  return (
-    <main className="dashboard">
-      <header className="heading">
-        <p className="kicker">Aura</p>
-        <h1>Where next</h1>
-      </header>
-      <section className="cards">
-        {actions.map((action) => {
-          const suggested = action.kind === suggestedKind;
-          return (
-            <article key={action.kind} className={suggested ? "card suggested" : "card"}>
-              <p className="kicker">{suggested ? "Suggested" : "Open"}</p>
-              <h2>{action.title}</h2>
-              <p className="detail">{action.detail}</p>
-              <button type="button" onClick={() => openAction(action.kind)}>
-                Open
-              </button>
-            </article>
-          );
-        })}
-      </section>
-      {error && <p className="error">{error}</p>}
-      <p className="hint">Ctrl+Alt+Space hides Aura</p>
     </main>
   );
 }

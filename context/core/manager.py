@@ -47,6 +47,8 @@ class ContextManager:
     # -------------------------
 
     def register_collector(self, collector: Collector) -> None:
+        if collector.source == "clipboard":
+            collector.set_enabled(self.snapshot_value.clipboard_enabled)
         self._collectors.append(collector)
 
     def start(self) -> None:

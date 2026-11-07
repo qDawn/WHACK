@@ -105,11 +105,11 @@ fn fit_full_screen(window: &tauri::WebviewWindow) {
         return;
     };
     let size = monitor.size();
-    let work = monitor.work_area();
+    let position = monitor.position();
     let _ = window.set_size(tauri::PhysicalSize::new(size.width, size.height));
     let _ = window.set_position(tauri::PhysicalPosition::new(
-        work.position.x as i32,
-        work.position.y as i32,
+        position.x,
+        position.y,
     ));
 }
 
@@ -194,7 +194,6 @@ fn toggle_window(app: &tauri::AppHandle) {
         }
         _ => {
             fit_full_screen(&window);
-            place_over_work_area(&window);
             let _ = window.show();
             let _ = window.set_focus();
         }
@@ -207,15 +206,12 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             read_suggestion,
             read_scratchpad,
-            write_scratchpad
+            write_scratchpad,
+            open_action
         ])
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
                 fit_full_screen(&window);
-        .invoke_handler(tauri::generate_handler![read_suggestion, open_action])
-        .setup(|app| {
-            if let Some(window) = app.get_webview_window("main") {
-                place_over_work_area(&window);
             }
             let handle = app.handle().clone();
             thread::spawn(move || listen_for_snapshots(handle));

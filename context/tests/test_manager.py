@@ -61,6 +61,21 @@ class ContextManagerTests(unittest.TestCase):
         self.assertEqual(snap.process_name, "")
         self.assertIsNone(snap.clipboard_text)
 
+    def test_agent_context_serializes_snapshot_and_event(self) -> None:
+        manager = ContextManager(platform="windows")
+        manager.publish(
+            ContextEvent(
+                event_type="active_window_changed",
+                source="active_window",
+                platform="windows",
+                data={"process_name": "Code.exe", "window_title": "Aura"},
+            )
+        )
+
+        context = manager.agent_context()
+        self.assertEqual(context["current_context"]["process_name"], "Code.exe")
+        self.assertEqual(context["recent_events"][0]["platform"], "windows")
+
 
 if __name__ == "__main__":
     unittest.main()

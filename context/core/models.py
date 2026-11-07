@@ -1,4 +1,4 @@
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass
 
 from context.core.events import utc_now
 
@@ -23,3 +23,6 @@ class ContextSnapshot:
 
     def touch(self) -> None:
         self.updated_at = utc_now()
+
+    def to_dict(self) -> dict:
+        return asdict(self)

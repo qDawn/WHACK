@@ -18,43 +18,47 @@ PIPE_WAIT = 0x00000000
 ERROR_PIPE_CONNECTED = 535
 INVALID_HANDLE = wintypes.HANDLE(-1).value
 
-kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
-kernel32.CreateNamedPipeW.argtypes = [
-    wintypes.LPCWSTR,
-    wintypes.DWORD,
-    wintypes.DWORD,
-    wintypes.DWORD,
-    wintypes.DWORD,
-    wintypes.DWORD,
-    wintypes.DWORD,
-    ctypes.c_void_p,
-]
-kernel32.CreateNamedPipeW.restype = wintypes.HANDLE
-kernel32.ConnectNamedPipe.argtypes = [wintypes.HANDLE, ctypes.c_void_p]
-kernel32.ConnectNamedPipe.restype = wintypes.BOOL
-kernel32.WriteFile.argtypes = [
-    wintypes.HANDLE,
-    ctypes.c_void_p,
-    wintypes.DWORD,
-    ctypes.POINTER(wintypes.DWORD),
-    ctypes.c_void_p,
-]
-kernel32.WriteFile.restype = wintypes.BOOL
-kernel32.FlushFileBuffers.argtypes = [wintypes.HANDLE]
-kernel32.FlushFileBuffers.restype = wintypes.BOOL
-kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
-kernel32.CloseHandle.restype = wintypes.BOOL
-kernel32.ReadFile.argtypes = [
-    wintypes.HANDLE,
-    ctypes.c_void_p,
-    wintypes.DWORD,
-    ctypes.POINTER(wintypes.DWORD),
-    ctypes.c_void_p,
-]
-kernel32.ReadFile.restype = wintypes.BOOL
+kernel32 = None
+if sys.platform.startswith("win"):
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel32.CreateNamedPipeW.argtypes = [
+        wintypes.LPCWSTR,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        wintypes.DWORD,
+        ctypes.c_void_p,
+    ]
+    kernel32.CreateNamedPipeW.restype = wintypes.HANDLE
+    kernel32.ConnectNamedPipe.argtypes = [wintypes.HANDLE, ctypes.c_void_p]
+    kernel32.ConnectNamedPipe.restype = wintypes.BOOL
+    kernel32.WriteFile.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD),
+        ctypes.c_void_p,
+    ]
+    kernel32.WriteFile.restype = wintypes.BOOL
+    kernel32.FlushFileBuffers.argtypes = [wintypes.HANDLE]
+    kernel32.FlushFileBuffers.restype = wintypes.BOOL
+    kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
+    kernel32.CloseHandle.restype = wintypes.BOOL
+    kernel32.ReadFile.argtypes = [
+        wintypes.HANDLE,
+        ctypes.c_void_p,
+        wintypes.DWORD,
+        ctypes.POINTER(wintypes.DWORD),
+        ctypes.c_void_p,
+    ]
+    kernel32.ReadFile.restype = wintypes.BOOL
 
 
 def _create_pipe(name: str = PIPE_NAME, access: int = PIPE_ACCESS_OUTBOUND) -> wintypes.HANDLE:
+    if kernel32 is None:
+        raise OSError("Windows named pipes are only available on Windows")
     handle = kernel32.CreateNamedPipeW(
         name,
         access,

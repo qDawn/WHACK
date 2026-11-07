@@ -8,6 +8,7 @@ from bridge.launch import catalog, parse_action, perform
 from bridge.pipe_server import serve, serve_actions
 from bridge.rules import first_match, load_json, project_paths
 from bridge.state_snapshot import to_state_snapshot
+from context.collectors.clipboard import ClipboardCollector
 from context.collectors.scratchpad import ScratchpadCollector
 from context.core.events import ContextEvent
 from context.core.manager import ContextManager
@@ -51,7 +52,7 @@ def main() -> None:
     actions = catalog(config)
 
     def on_event(event: ContextEvent, snapshot: ContextSnapshot) -> None:
-        if event.event_type != "scratchpad_changed":
+        if event.event_type not in {"clipboard_changed", "active_window_changed", "scratchpad_changed"}:
             return
         suggestion = first_match(snapshot, rules, config)
         message = to_state_snapshot(snapshot, suggestion, actions=actions)
@@ -73,8 +74,9 @@ def main() -> None:
         outbox.push(json.dumps({"protocol": "aura", "type": "hud.hide"}))
 
     manager.subscribe(on_event)
-    collector = ScratchpadCollector(note_path)
-    collector.start(manager.publish)
+    manager.register_collector(ClipboardCollector())
+    manager.register_collector(ScratchpadCollector(note_path))
+    manager.start()
     print(f"Watching {note_path}", flush=True)
     print("Leave this window open. Press Ctrl+C to stop.", flush=True)
 
@@ -92,7 +94,7 @@ def main() -> None:
         pass
     finally:
         stop.set()
-        collector.stop()
+        manager.stop()
 
 
 if __name__ == "__main__":

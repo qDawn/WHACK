@@ -1,5 +1,19 @@
-from context.core.events import ContextEvent, utc_now
-from context.core.manager import ContextManager
-from context.core.models import ContextSnapshot
+from importlib import import_module
 
-__all__ = ["ContextEvent", "ContextManager", "ContextSnapshot", "utc_now"]
+_EXPORTS = {
+	"ContextEvent": "events",
+	"ContextManager": "manager",
+	"ContextSnapshot": "models",
+	"utc_now": "events",
+}
+
+__all__ = list(_EXPORTS)
+
+
+def __getattr__(name: str):
+	module_name = _EXPORTS.get(name)
+	if module_name is None:
+		raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+	value = getattr(import_module(f"{__name__}.{module_name}"), name)
+	globals()[name] = value
+	return value

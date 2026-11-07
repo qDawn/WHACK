@@ -1,4 +1,5 @@
 import json
+import sys
 import threading
 import time
 import unittest
@@ -7,6 +8,7 @@ from bridge.pipe_server import PIPE_NAME, serve
 
 
 class PipeServerTests(unittest.TestCase):
+    @unittest.skipUnless(sys.platform.startswith("win"), "Windows named pipes only")
     def test_panel_can_read_one_line(self) -> None:
         message = json.dumps(
             {"protocol": "ag-ui", "payload": {"suggestion": {"title": "Open the Godot project"}}}
