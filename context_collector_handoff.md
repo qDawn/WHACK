@@ -233,3 +233,17 @@ dashboard. It is to prove that a local Python context collector can
 reliably capture a small set of desktop signals, normalise them into a
 consistent event format, and make that context available to the
 dashboard through an agreed interface.
+
+## 12. Agreed integration (7 November 2026)
+
+The dashboard teammate closed the open questions. Follow
+`dashboard_handoff.md` in this repo. Short version:
+
+-   Collectors live in-process and publish `ContextEvent` values to
+    `ContextManager`. No FastAPI server and no Tauri command.
+-   The package now exists under `context/`. Fill in the collector
+    `start`/`stop` methods. Leave `scratchpad.py`, `bridge/`, and `hud/`
+    to the dashboard.
+-   The HUD snapshot is produced by `bridge/state_snapshot.py`.
+-   Windows 11 is the demo target. Linux platform adapters stay so
+    collection can be developed on Linux.
