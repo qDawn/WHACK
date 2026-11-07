@@ -197,7 +197,6 @@ fn toggle_window(app: &tauri::AppHandle) {
         }
         _ => {
             fit_full_screen(&window);
-            place_over_work_area(&window);
             let _ = window.show();
             let _ = window.set_focus();
         }
@@ -209,16 +208,13 @@ pub fn run() {
     tauri::Builder::default()
         .invoke_handler(tauri::generate_handler![
             read_suggestion,
+            open_action,
             read_scratchpad,
             write_scratchpad
         ])
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
                 fit_full_screen(&window);
-        .invoke_handler(tauri::generate_handler![read_suggestion, open_action])
-        .setup(|app| {
-            if let Some(window) = app.get_webview_window("main") {
-                place_over_work_area(&window);
             }
             let handle = app.handle().clone();
             thread::spawn(move || listen_for_snapshots(handle));

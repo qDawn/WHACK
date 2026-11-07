@@ -3,6 +3,7 @@
 
 from collections import deque
 from collections.abc import Callable
+from dataclasses import replace
 from threading import RLock
 
 from context.core.events import ContextEvent
@@ -73,7 +74,7 @@ class ContextManager:
 
     def snapshot(self) -> ContextSnapshot:
         with self._lock:
-            return self.snapshot_value
+            return replace(self.snapshot_value)
 
     def subscribe(self, callback: Subscriber) -> None:
         self._subscribers.append(callback)
@@ -102,12 +103,12 @@ class ContextManager:
 
             self._history.append(event)
 
-            snap = self.snapshot_value
+            snap = replace(self.snapshot_value)
             subscribers = list(self._subscribers)
 
-        # Notify outside the lock to avoid blocking other collectors.
-        for callback in subscribers:
-            callback(event, snap)
+            # Stay ordered: a slower collector must not overwrite a newer snapshot.
+            for callback in subscribers:
+                callback(event, snap)
 
     def _apply(self, event: ContextEvent) -> None:
         snap = self.snapshot_value

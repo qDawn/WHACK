@@ -42,8 +42,16 @@ def parse_action(line: str, entries: list[dict[str, Any]]) -> str:
     return str(kind)
 
 
-def perform(kind: str, config: dict[str, Any], entries: list[dict[str, Any]]) -> None:
-    entry = next((item for item in entries if item["id"] == kind), None)
+def perform(
+    kind: str,
+    config: dict[str, Any],
+    entries: list[dict[str, Any]],
+    target: str | None = None,
+) -> None:
+    if kind == "open_url":
+        entry: dict[str, Any] | None = {"id": "open_url", "method": "link", "target": target or ""}
+    else:
+        entry = next((item for item in entries if item["id"] == kind), None)
     if entry is None:
         raise ValueError(f"Unknown action: {kind}")
     method = entry["method"]
