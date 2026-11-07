@@ -1,4 +1,5 @@
-use std::io::{BufRead, BufReader};
+use std::fs::OpenOptions;
+use std::io::{BufRead, BufReader, Write};
 use std::path::PathBuf;
 use std::thread;
 use std::time::Duration;
@@ -112,41 +113,35 @@ fn fit_full_screen(window: &tauri::WebviewWindow) {
     ));
 }
 
-fn text_field(value: &serde_json::Value, key: &str) -> String {
-    value
-        .get(key)
-        .and_then(|item| item.as_str())
-        .unwrap_or("")
-        .to_string()
+fn hide_window(app: &tauri::AppHandle) {
+    let app_handle = app.clone();
+    let _ = app.run_on_main_thread(move || {
+        if let Some(window) = app_handle.get_webview_window("main") {
+            let _ = window.hide();
+        }
+    });
 }
 
-fn suggestion_from_line(line: &str) -> Option<SuggestionView> {
-    let value: serde_json::Value = serde_json::from_str(line).ok()?;
-    let Some(suggestion) = value.pointer("/payload/suggestion") else {
-        return Some(SuggestionView {
-            title: "No suggestion for this context".to_string(),
-            detail: String::new(),
-            reason: String::new(),
-            source: "none".to_string(),
-            kind: "none".to_string(),
-        });
+fn handle_pipe_line(app: &tauri::AppHandle, line: &str) {
+    let Ok(value) = serde_json::from_str::<serde_json::Value>(line) else {
+        return;
     };
-    if suggestion.is_null() {
-        return Some(SuggestionView {
-            title: "No suggestion for this context".to_string(),
-            detail: String::new(),
-            reason: String::new(),
-            source: "none".to_string(),
-            kind: "none".to_string(),
-        });
+    match value.get("type").and_then(|item| item.as_str()) {
+        Some("hud.hide") => hide_window(app),
+        Some("hud.error") => {
+            let message = value
+                .get("message")
+                .and_then(|item| item.as_str())
+                .unwrap_or("Open failed")
+                .to_string();
+            let _ = app.emit("hud-error", message);
+        }
+        _ => {
+            if let Some(payload) = value.get("payload").cloned() {
+                let _ = app.emit("snapshot", payload);
+            }
+        }
     }
-    Some(SuggestionView {
-        title: text_field(suggestion, "title"),
-        detail: text_field(suggestion, "detail"),
-        reason: text_field(suggestion, "reason"),
-        source: text_field(suggestion, "source"),
-        kind: text_field(suggestion, "kind"),
-    })
 }
 
 fn listen_for_snapshots(app: tauri::AppHandle) {
@@ -155,15 +150,38 @@ fn listen_for_snapshots(app: tauri::AppHandle) {
             Ok(file) => {
                 for line in BufReader::new(file).lines() {
                     let Ok(line) = line else { break };
-                    let Some(suggestion) = suggestion_from_line(&line) else {
-                        continue;
-                    };
-                    let _ = app.emit("suggestion", suggestion);
+                    handle_pipe_line(&app, &line);
                 }
             }
             Err(_) => thread::sleep(Duration::from_millis(400)),
         }
     }
+}
+
+#[tauri::command]
+fn open_action(kind: String) -> Result<(), String> {
+    match kind.as_str() {
+        "open_godot" | "open_terminal" | "focus_discord" => {}
+        _ => return Err("Unknown action".to_string()),
+    }
+    let line = format!("{{\"kind\":\"{kind}\"}}\n");
+    let mut last_error = String::from("Watcher is not running");
+    for _ in 0..8 {
+        match OpenOptions::new()
+            .write(true)
+            .open(r"\\.\pipe\aura-actions")
+        {
+            Ok(mut pipe) => {
+                pipe.write_all(line.as_bytes()).map_err(|error| error.to_string())?;
+                return Ok(());
+            }
+            Err(error) => {
+                last_error = error.to_string();
+                thread::sleep(Duration::from_millis(80));
+            }
+        }
+    }
+    Err(last_error)
 }
 
 fn toggle_window(app: &tauri::AppHandle) {
@@ -176,6 +194,7 @@ fn toggle_window(app: &tauri::AppHandle) {
         }
         _ => {
             fit_full_screen(&window);
+            place_over_work_area(&window);
             let _ = window.show();
             let _ = window.set_focus();
         }
@@ -193,6 +212,10 @@ pub fn run() {
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
                 fit_full_screen(&window);
+        .invoke_handler(tauri::generate_handler![read_suggestion, open_action])
+        .setup(|app| {
+            if let Some(window) = app.get_webview_window("main") {
+                place_over_work_area(&window);
             }
             let handle = app.handle().clone();
             thread::spawn(move || listen_for_snapshots(handle));
