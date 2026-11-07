@@ -1,0 +1,26 @@
+{
+  "entries": [
+    {
+      "id": "open_godot",
+      "title": "Godot",
+      "detail": "${godotProject}",
+      "method": "file",
+      "target": "${godotProject}"
+    },
+    {
+      "id": "open_terminal",
+      "title": "Terminal",
+      "detail": "${gitRepo}",
+      "method": "command",
+      "command": ["wt.exe", "-d", "${gitRepo}"],
+      "fallback": ["powershell.exe", "-NoExit", "-Command", "Set-Location -LiteralPath '${gitRepo}'"]
+    },
+    {
+      "id": "focus_discord",
+      "title": "Discord",
+      "detail": "Discord",
+      "method": "link",
+      "target": "discord:"
+    }
+  ]
+}

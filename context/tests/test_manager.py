@@ -12,7 +12,6 @@ class ContextManagerTests(unittest.TestCase):
             ContextEvent(
                 event_type="active_window_changed",
                 source="active_window",
-                platform="windows",
                 data={"process_name": "Notepad.exe", "window_title": "aura-scratch.md"},
             )
         )
@@ -20,7 +19,6 @@ class ContextManagerTests(unittest.TestCase):
             ContextEvent(
                 event_type="scratchpad_changed",
                 source="scratchpad",
-                platform="windows",
                 data={"path": "C:/Users/nggro/aura-scratch.md", "text": "keep going on the platformer"},
             )
         )
@@ -39,7 +37,6 @@ class ContextManagerTests(unittest.TestCase):
             ContextEvent(
                 event_type="clipboard_changed",
                 source="clipboard",
-                platform="windows",
                 data={"content_type": "text", "text": "secret token"},
             )
         )
@@ -53,7 +50,6 @@ class ContextManagerTests(unittest.TestCase):
             ContextEvent(
                 event_type="screen_captured",
                 source="screen",
-                platform="linux",
                 data={"path": "/tmp/screen.png", "width": 10, "height": 10},
             )
         )

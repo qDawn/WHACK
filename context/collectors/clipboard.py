@@ -64,15 +64,3 @@ class ClipboardCollector(Collector):
 
         if self.thread:
             self.thread.join()
-
-
-# Usage
-collector = ClipboardCollector()
-collector.start()
-
-try:
-    collector.thread.join()
-
-except KeyboardInterrupt:
-    print("Stopping collector...")
-    collector.stop()

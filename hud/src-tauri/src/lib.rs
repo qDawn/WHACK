@@ -118,9 +118,12 @@ fn listen_for_snapshots(app: tauri::AppHandle) {
 
 #[tauri::command]
 fn open_action(kind: String) -> Result<(), String> {
-    match kind.as_str() {
-        "open_godot" | "open_terminal" | "focus_discord" => {}
-        _ => return Err("Unknown action".to_string()),
+    if kind.is_empty()
+        || !kind
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || character == '_' || character == '-')
+    {
+        return Err("Unknown action".to_string());
     }
     let line = format!("{{\"kind\":\"{kind}\"}}\n");
     let mut last_error = String::from("Watcher is not running");

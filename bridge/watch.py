@@ -4,7 +4,7 @@ import json
 import threading
 from pathlib import Path
 
-from bridge.launch import catalog, parse_action, perform
+from bridge.launch import cards, load_entries, parse_action, perform
 from bridge.pipe_server import serve, serve_actions
 from bridge.rules import first_match, load_json, project_paths
 from bridge.state_snapshot import to_state_snapshot
@@ -48,7 +48,8 @@ def main() -> None:
         clipboard_enabled=bool(config.get("clipboardEnabled", True)),
     )
     outbox = Outbox()
-    actions = catalog(config)
+    entries = load_entries()
+    actions = cards(entries, config)
 
     def on_event(event: ContextEvent, snapshot: ContextSnapshot) -> None:
         if event.event_type != "scratchpad_changed":
@@ -63,8 +64,8 @@ def main() -> None:
 
     def on_action(line: str) -> None:
         try:
-            kind = parse_action(line)
-            perform(kind, config)
+            kind = parse_action(line, entries)
+            perform(kind, config, entries)
         except Exception as exc:
             print(f"Open failed: {exc}", flush=True)
             outbox.push(json.dumps({"protocol": "aura", "type": "hud.error", "message": str(exc)}))

@@ -6,7 +6,6 @@ import threading
 
 from context.collectors.base import Publish
 from context.core.events import ContextEvent
-from context.platform.detect import detect_platform
 
 
 class ScratchpadCollector:
@@ -49,7 +48,6 @@ class ScratchpadCollector:
                         ContextEvent(
                             event_type="scratchpad_changed",
                             source=self.source,
-                            platform=detect_platform(),
                             data={"path": str(self.path), "text": text},
                         )
                     )
