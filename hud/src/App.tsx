@@ -1,60 +1,108 @@
 import { useEffect, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
-import { suggestionFromFixture, type Suggestion } from "./suggestion";
 import "./App.css";
+
+type ActionCard = {
+  kind: string;
+  title: string;
+  detail: string;
+};
+
+type Suggestion = {
+  kind: string;
+  title: string;
+  detail: string;
+  reason: string;
+  source: string;
+};
+
+type SnapshotPayload = {
+  suggestion?: Suggestion | null;
+  actions?: ActionCard[];
+};
+
+const DEFAULT_ACTIONS: ActionCard[] = [
+  { kind: "open_godot", title: "Godot", detail: "Project path from aura.config.json" },
+  { kind: "open_terminal", title: "Terminal", detail: "Repo path from aura.config.json" },
+  { kind: "focus_discord", title: "Discord", detail: "Discord" },
+];
 
 function runningInTauri(): boolean {
   return "__TAURI_INTERNALS__" in window;
 }
 
 export default function App() {
-  const [suggestion, setSuggestion] = useState<Suggestion | null>(null);
+  const [actions, setActions] = useState<ActionCard[]>(DEFAULT_ACTIONS);
+  const [suggestedKind, setSuggestedKind] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     if (!runningInTauri()) {
-      setSuggestion(suggestionFromFixture());
       return;
     }
 
-    let live = false;
-    let unlisten: (() => void) | undefined;
-    listen<Suggestion>("suggestion", (event) => {
-      live = true;
-      setError(null);
-      setSuggestion(event.payload);
+    let unlistenSnapshot: (() => void) | undefined;
+    let unlistenError: (() => void) | undefined;
+
+    listen<SnapshotPayload>("snapshot", (event) => {
+      const payload = event.payload;
+      if (payload.actions && payload.actions.length > 0) {
+        setActions(payload.actions);
+      }
+      setSuggestedKind(payload.suggestion?.kind ?? null);
     }).then((stop) => {
-      unlisten = stop;
+      unlistenSnapshot = stop;
     });
 
-    invoke<Suggestion>("read_suggestion")
-      .then((value) => {
-        if (!live) {
-          setSuggestion(value);
-        }
-      })
-      .catch((reason: unknown) => {
-        if (!live) {
-          setError(reason instanceof Error ? reason.message : String(reason));
-        }
-      });
+    listen<string>("hud-error", (event) => {
+      setError(event.payload);
+    }).then((stop) => {
+      unlistenError = stop;
+    });
 
     return () => {
-      unlisten?.();
+      unlistenSnapshot?.();
+      unlistenError?.();
     };
   }, []);
 
-  const title = suggestion?.title ?? (error ? "Could not read the suggestion" : "Reading suggestion");
+  async function openAction(kind: string) {
+    setError(null);
+    if (!runningInTauri()) {
+      setError("Open works from the Aura window, with the watcher running.");
+      return;
+    }
+    try {
+      await invoke("open_action", { kind });
+    } catch (reason: unknown) {
+      setError(reason instanceof Error ? reason.message : String(reason));
+    }
+  }
 
   return (
-    <main className="hud">
-      <p className="kicker">Aura · {suggestion?.source ?? "waiting"}</p>
-      <h1>{title}</h1>
-      {suggestion?.detail && <p className="detail">{suggestion.detail}</p>}
-      {suggestion?.reason && <p className="reason">{suggestion.reason}</p>}
-      {error && <p className="reason">{error}</p>}
-      <p className="hint">Ctrl+Alt+Space shows and hides this panel</p>
+    <main className="dashboard">
+      <header className="heading">
+        <p className="kicker">Aura</p>
+        <h1>Where next</h1>
+      </header>
+      <section className="cards">
+        {actions.map((action) => {
+          const suggested = action.kind === suggestedKind;
+          return (
+            <article key={action.kind} className={suggested ? "card suggested" : "card"}>
+              <p className="kicker">{suggested ? "Suggested" : "Open"}</p>
+              <h2>{action.title}</h2>
+              <p className="detail">{action.detail}</p>
+              <button type="button" onClick={() => openAction(action.kind)}>
+                Open
+              </button>
+            </article>
+          );
+        })}
+      </section>
+      {error && <p className="error">{error}</p>}
+      <p className="hint">Ctrl+Alt+Space hides Aura</p>
     </main>
   );
 }

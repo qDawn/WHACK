@@ -18,48 +18,90 @@ body,
   overflow: hidden;
 }
 
-.hud {
+.dashboard {
   box-sizing: border-box;
   height: 100%;
-  padding: 16px 18px 12px;
+  padding: 48px 64px 28px;
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 28px;
+}
+
+.heading h1,
+.card h2 {
+  margin: 0;
+  font-weight: 650;
+  line-height: 1.15;
+}
+
+.heading h1 {
+  font-size: 40px;
+}
+
+.kicker,
+.detail,
+.hint,
+.error {
+  margin: 0;
 }
 
 .kicker {
-  margin: 0;
-  font-size: 11px;
+  font-size: 12px;
   letter-spacing: 0.08em;
   text-transform: uppercase;
   color: #b9a48a;
 }
 
-h1 {
-  margin: 0;
-  font-size: 20px;
-  font-weight: 650;
-  line-height: 1.25;
+.cards {
+  flex: 1;
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 24px;
+  align-items: stretch;
 }
 
-.detail,
-.reason,
-.hint {
-  margin: 0;
+.card {
+  background: #26221c;
+  border: 1px solid #3a342c;
+  padding: 28px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+
+.card.suggested {
+  border-color: #d7b899;
+}
+
+.card h2 {
+  font-size: 32px;
 }
 
 .detail {
-  font-size: 12px;
   color: #d9d0c3;
   word-break: break-all;
 }
 
-.reason {
-  font-size: 13px;
+.card button {
+  margin-top: auto;
+  align-self: flex-start;
+  background: #d7b899;
+  color: #1c1915;
+  border: 0;
+  padding: 10px 18px;
+  font: inherit;
+  font-weight: 650;
+}
+
+.card button:hover {
+  background: #e4c9b0;
+}
+
+.error {
+  color: #e7b2a4;
 }
 
 .hint {
-  margin-top: auto;
-  font-size: 11px;
+  font-size: 12px;
   color: #b9a48a;
 }

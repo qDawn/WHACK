@@ -10,7 +10,9 @@ import sys
 import threading
 
 PIPE_NAME = r"\\.\pipe\aura"
+ACTION_PIPE_NAME = r"\\.\pipe\aura-actions"
 PIPE_ACCESS_OUTBOUND = 0x00000002
+PIPE_ACCESS_INBOUND = 0x00000001
 PIPE_TYPE_BYTE = 0x00000000
 PIPE_WAIT = 0x00000000
 ERROR_PIPE_CONNECTED = 535
@@ -42,12 +44,20 @@ kernel32.FlushFileBuffers.argtypes = [wintypes.HANDLE]
 kernel32.FlushFileBuffers.restype = wintypes.BOOL
 kernel32.CloseHandle.argtypes = [wintypes.HANDLE]
 kernel32.CloseHandle.restype = wintypes.BOOL
+kernel32.ReadFile.argtypes = [
+    wintypes.HANDLE,
+    ctypes.c_void_p,
+    wintypes.DWORD,
+    ctypes.POINTER(wintypes.DWORD),
+    ctypes.c_void_p,
+]
+kernel32.ReadFile.restype = wintypes.BOOL
 
 
-def _create_pipe() -> wintypes.HANDLE:
+def _create_pipe(name: str = PIPE_NAME, access: int = PIPE_ACCESS_OUTBOUND) -> wintypes.HANDLE:
     handle = kernel32.CreateNamedPipeW(
-        PIPE_NAME,
-        PIPE_ACCESS_OUTBOUND,
+        name,
+        access,
         PIPE_TYPE_BYTE | PIPE_WAIT,
         1,
         65536,
@@ -78,8 +88,28 @@ def _write_line(handle: wintypes.HANDLE, line: str) -> bool:
     return True
 
 
-def serve(latest_line: Callable[[], str | None], stop: threading.Event) -> None:
-    """Accept one panel at a time and send the latest snapshot line."""
+def _read_line(handle: wintypes.HANDLE) -> str | None:
+    chunks: list[bytes] = []
+    buffer = ctypes.create_string_buffer(4096)
+    read = wintypes.DWORD(0)
+    while True:
+        ok = kernel32.ReadFile(handle, buffer, 4096, ctypes.byref(read), None)
+        if not ok or read.value == 0:
+            break
+        chunks.append(buffer.raw[: read.value])
+        if b"\n" in b"".join(chunks):
+            break
+    if not chunks:
+        return None
+    return b"".join(chunks).decode("utf-8", errors="replace")
+
+
+def serve(
+    latest_line: Callable[[], str | None],
+    stop: threading.Event,
+    controls: Callable[[], list[str]] | None = None,
+) -> None:
+    """Accept one panel at a time and send snapshot and control lines."""
 
     if not sys.platform.startswith("win"):
         while not stop.wait(0.5):
@@ -97,6 +127,14 @@ def serve(latest_line: Callable[[], str | None], stop: threading.Event) -> None:
             continue
         sent: str | None = None
         while not stop.is_set():
+            pending = controls() if controls is not None else []
+            failed = False
+            for line in pending:
+                if not _write_line(handle, line):
+                    failed = True
+                    break
+            if failed:
+                break
             line = latest_line()
             if line is not None and line != sent:
                 if not _write_line(handle, line):
@@ -105,3 +143,26 @@ def serve(latest_line: Callable[[], str | None], stop: threading.Event) -> None:
             if stop.wait(0.2):
                 break
         kernel32.CloseHandle(handle)
+
+
+def serve_actions(on_line: Callable[[str], None], stop: threading.Event) -> None:
+    """Read one Open request at a time from the panel."""
+
+    if not sys.platform.startswith("win"):
+        while not stop.wait(0.5):
+            pass
+        return
+
+    while not stop.is_set():
+        try:
+            handle = _create_pipe(ACTION_PIPE_NAME, PIPE_ACCESS_INBOUND)
+        except OSError:
+            stop.wait(0.5)
+            continue
+        if not _connect(handle):
+            kernel32.CloseHandle(handle)
+            continue
+        line = _read_line(handle)
+        kernel32.CloseHandle(handle)
+        if line:
+            on_line(line)
