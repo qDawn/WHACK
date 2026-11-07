@@ -35,6 +35,44 @@ fn fixture_path() -> Result<PathBuf, String> {
     ))
 }
 
+fn configured_scratchpad_path() -> Result<PathBuf, String> {
+    let manifest = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let root = manifest.join("../..");
+    let config: serde_json::Value = serde_json::from_slice(
+        &std::fs::read(root.join("aura.config.json")).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    let path = config
+        .get("scratchpadPath")
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| !value.is_empty())
+        .ok_or_else(|| "aura.config.json has no scratchpadPath".to_string())?;
+    let path = PathBuf::from(path);
+    Ok(if path.is_absolute() {
+        path
+    } else {
+        root.join(path)
+    })
+}
+
+#[tauri::command]
+fn read_scratchpad() -> Result<String, String> {
+    match std::fs::read_to_string(configured_scratchpad_path()?) {
+        Ok(text) => Ok(text),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(String::new()),
+        Err(error) => Err(error.to_string()),
+    }
+}
+
+#[tauri::command]
+fn write_scratchpad(text: String) -> Result<(), String> {
+    let path = configured_scratchpad_path()?;
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+    }
+    std::fs::write(path, text).map_err(|error| error.to_string())
+}
+
 #[tauri::command]
 fn read_suggestion() -> Result<SuggestionView, String> {
     let raw = std::fs::read_to_string(fixture_path()?).map_err(|error| error.to_string())?;
@@ -147,7 +185,11 @@ fn toggle_window(app: &tauri::AppHandle) {
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
     tauri::Builder::default()
-        .invoke_handler(tauri::generate_handler![read_suggestion])
+        .invoke_handler(tauri::generate_handler![
+            read_suggestion,
+            read_scratchpad,
+            write_scratchpad
+        ])
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
                 fit_full_screen(&window);

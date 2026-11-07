@@ -141,8 +141,105 @@ h1 {
   display: flex;
   align-items: flex-end;
   justify-content: center;
-  padding: 0 8vw;
-  gap: 0;
+  padding: 0 42px;
+  gap: 18px;
+}
+
+.tab-card-list {
+  display: flex;
+  align-items: flex-end;
+}
+
+.quick-note-trigger,
+.suggestion-action {
+  border: 1px solid rgba(125, 211, 252, 0.4);
+  border-radius: 12px;
+  background: rgba(125, 211, 252, 0.14);
+  color: #e6f7ff;
+  cursor: pointer;
+  font-weight: 600;
+  transition: background 160ms ease, transform 160ms ease;
+}
+
+.quick-note-trigger {
+  flex: 0 0 auto;
+  height: 48px;
+  padding: 0 18px;
+  margin-bottom: 10px;
+}
+
+.quick-note-trigger span {
+  margin-right: 8px;
+  font-size: 20px;
+  vertical-align: -1px;
+}
+
+.quick-note-trigger:hover,
+.suggestion-action:hover {
+  background: rgba(125, 211, 252, 0.24);
+  transform: translateY(-2px);
+}
+
+.quick-note {
+  position: absolute;
+  z-index: 3;
+  left: 42px;
+  bottom: 210px;
+  display: flex;
+  flex-direction: column;
+  width: min(460px, calc(100vw - 84px));
+  height: 250px;
+  padding: 16px;
+  border: 1px solid rgba(255, 255, 255, 0.16);
+  border-radius: 16px;
+  background: rgba(13, 20, 31, 0.96);
+  box-shadow: 0 24px 70px rgba(0, 0, 0, 0.5);
+}
+
+.quick-note__heading {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.quick-note__heading span {
+  margin-left: auto;
+  color: rgba(226, 232, 240, 0.65);
+  font-size: 12px;
+}
+
+.quick-note__heading button {
+  width: 30px;
+  height: 30px;
+  border: 0;
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.08);
+  color: #f8f5f0;
+  cursor: pointer;
+  font-size: 20px;
+}
+
+.quick-note textarea {
+  flex: 1;
+  width: 100%;
+  box-sizing: border-box;
+  resize: none;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: #f8f5f0;
+  font: inherit;
+  line-height: 1.55;
+}
+
+.quick-note textarea::placeholder {
+  color: rgba(226, 232, 240, 0.45);
+}
+
+.suggestion-action {
+  margin-top: 20px;
+  padding: 10px 20px;
 }
 
 .tab-card {
@@ -235,6 +332,12 @@ h1 {
     padding: 0 12px;
     justify-content: flex-start;
     overflow-x: auto;
+  }
+
+  .quick-note {
+    left: 18px;
+    bottom: 200px;
+    width: calc(100vw - 68px);
   }
 
   .tab-card {

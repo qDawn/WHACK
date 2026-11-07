@@ -79,6 +79,19 @@ class RuleMatchTests(unittest.TestCase):
     def test_empty_context_has_no_suggestion(self) -> None:
         self.assertIsNone(first_match(snapshot("hello"), RULES, CONFIG))
 
+    def test_website_in_note_suggests_opening_default_browser(self) -> None:
+        suggestion = first_match(snapshot("todo: review https://example.com/docs."), RULES, CONFIG)
+        self.assertIsNotNone(suggestion)
+        assert suggestion is not None
+        self.assertEqual(suggestion["kind"], "open_url")
+        self.assertEqual(suggestion["target"], "https://example.com/docs")
+
+    def test_www_link_is_normalized_to_https(self) -> None:
+        suggestion = first_match(snapshot("read www.example.com/guide next"), RULES, CONFIG)
+        self.assertIsNotNone(suggestion)
+        assert suggestion is not None
+        self.assertEqual(suggestion["target"], "https://www.example.com/guide")
+
 
 if __name__ == "__main__":
     unittest.main()
