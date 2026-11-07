@@ -61,18 +61,17 @@ fn read_suggestion() -> Result<SuggestionView, String> {
     })
 }
 
-fn place_top_right(window: &tauri::WebviewWindow) {
+fn fit_full_screen(window: &tauri::WebviewWindow) {
     let Ok(Some(monitor)) = window.primary_monitor() else {
         return;
     };
-    let Ok(size) = window.outer_size() else {
-        return;
-    };
+    let size = monitor.size();
     let work = monitor.work_area();
-    let margin = (16.0 * monitor.scale_factor()) as i32;
-    let x = work.position.x + work.size.width as i32 - size.width as i32 - margin;
-    let y = work.position.y + margin;
-    let _ = window.set_position(tauri::PhysicalPosition::new(x, y));
+    let _ = window.set_size(tauri::PhysicalSize::new(size.width, size.height));
+    let _ = window.set_position(tauri::PhysicalPosition::new(
+        work.position.x as i32,
+        work.position.y as i32,
+    ));
 }
 
 fn text_field(value: &serde_json::Value, key: &str) -> String {
@@ -138,6 +137,7 @@ fn toggle_window(app: &tauri::AppHandle) {
             let _ = window.hide();
         }
         _ => {
+            fit_full_screen(&window);
             let _ = window.show();
             let _ = window.set_focus();
         }
@@ -150,7 +150,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![read_suggestion])
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
-                place_top_right(&window);
+                fit_full_screen(&window);
             }
             let handle = app.handle().clone();
             thread::spawn(move || listen_for_snapshots(handle));
