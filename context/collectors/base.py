@@ -1,6 +1,7 @@
 
 # context/collectors/base.py
 
+import threading
 from collections.abc import Callable
 from context.core.events import ContextEvent
 
@@ -15,6 +16,7 @@ class Collector:
     def __init__(self) -> None:
         self.enabled = True
         self.publish: Publish | None = None
+        self.thread = None
 
     def set_enabled(self, enabled: bool) -> None:
         self.enabled = enabled
@@ -24,9 +26,24 @@ class Collector:
         if self.enabled and self.publish is not None:
             self.publish(event)
 
-    def start(self, publish: Publish) -> None:
-        """Start the collector and give it an event publisher."""
-        raise NotImplementedError
+    def start(self, publish):
+        if self.thread and self.thread.is_alive():
+            return
 
-    def stop(self) -> None:
-        raise NotImplementedError
+        self.publish = publish
+        self.stop_event.clear()
+
+        self.thread = threading.Thread(
+            target=self._run,
+            daemon=True
+        )
+
+        self.thread.start()
+
+    def stop(self):
+        self.stop_event.set()
+
+        if self.thread and self.thread.is_alive():
+            self.thread.join()
+
+        self.thread = None
