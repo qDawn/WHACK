@@ -80,14 +80,28 @@ def _open_link(target: str) -> None:
 
 
 def _run_command(entry: dict[str, Any], config: dict[str, Any]) -> None:
-    command = _arguments(entry.get("command"), config)
+    command = _directory_fallback(entry, _arguments(entry.get("command"), config), config)
     try:
         subprocess.Popen(command)
     except FileNotFoundError:
         fallback = entry.get("fallback")
         if not fallback:
             raise
-        subprocess.Popen(_arguments(fallback, config))
+        subprocess.Popen(_directory_fallback(entry, _arguments(fallback, config), config))
+
+
+def _directory_fallback(
+    entry: dict[str, Any],
+    command: list[str],
+    config: dict[str, Any],
+) -> list[str]:
+    """Use directoryFallback when a command names a gitRepo directory that is not there."""
+
+    replacement = substitute(str(entry.get("directoryFallback", "") or ""), config)
+    repo = substitute("${gitRepo}", config)
+    if not replacement or not repo or os.path.isdir(repo):
+        return command
+    return [part.replace(repo, replacement) for part in command]
 
 
 def _arguments(values: Any, config: dict[str, Any]) -> list[str]:

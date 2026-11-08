@@ -14,12 +14,16 @@ def load_json(path: Path) -> dict[str, Any]:
 
 
 def substitute(value: str, config: dict[str, Any]) -> str:
+    project = str(config.get("godotProject", ""))
     tokens = {
-        "${godotProject}": str(config.get("godotProject", "")),
+        "${godotProjectDir}": str(Path(project).parent) if project else "",
+        "${godotProject}": project,
+        "${godotEditor}": str(config.get("godotEditor", "")),
         "${gitRepo}": str(config.get("gitRepo", "")),
         "${scratchpadPath}": str(config.get("scratchpadPath", "")),
     }
-    for token, replacement in tokens.items():
+    # Longer tokens first so ${godotProject} does not consume ${godotProjectDir}.
+    for token, replacement in sorted(tokens.items(), key=lambda item: len(item[0]), reverse=True):
         value = value.replace(token, replacement)
     return value
 

@@ -23,7 +23,7 @@ function sketchFamily(kind: string): SketchFamily {
   if (EDITOR_KINDS.has(kind)) return "editor";
   if (CHAT_KINDS.has(kind)) return "chat";
   if (TERMINAL_KINDS.has(kind)) return "terminal";
-  if (kind === "open_godot") return "godot";
+  if (kind === "open_godot" || kind === "open_godot_editor") return "godot";
   return "generic";
 }
 

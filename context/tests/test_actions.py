@@ -1,6 +1,7 @@
 import unittest
 
-from bridge.launch import cards, load_entries, parse_action, perform
+from bridge.launch import _arguments, _directory_fallback, cards, load_entries, parse_action, perform
+from bridge.rules import ROOT, load_json
 from bridge.watch import accept_action
 
 
@@ -54,7 +55,39 @@ class ActionTests(unittest.TestCase):
         self.assertEqual(len(ids), len(set(ids)))
         for entry in loaded:
             self.assertIn(entry["method"], ("file", "command", "link"))
-        self.assertEqual(ids[:3], ["open_godot", "open_terminal", "focus_discord"])
+        self.assertEqual(ids[:4], ["open_godot", "open_godot_editor", "open_terminal", "focus_discord"])
+        shipped = load_json(ROOT / "aura.config.json")
+        godot = next(entry for entry in loaded if entry["id"] == "open_godot")
+        resolved = _arguments(godot["command"], shipped)
+        self.assertEqual(resolved[1:3], ["--editor", "--path"])
+        self.assertTrue(resolved[3].endswith("Game-Dev-Coursework"))
+
+    def test_terminal_falls_back_when_the_repo_directory_is_missing(self) -> None:
+        entry = {
+            "command": ["wt.exe", "-d", "${gitRepo}"],
+            "fallback": ["powershell.exe", "-NoExit", "-Command", "Set-Location -LiteralPath '${gitRepo}'"],
+            "directoryFallback": "C:/Users/nggro",
+        }
+        config = {"gitRepo": "C:/missing/platformer"}
+        command = _directory_fallback(entry, _arguments(entry["command"], config), config)
+        fallback = _directory_fallback(entry, _arguments(entry["fallback"], config), config)
+        self.assertEqual(command, ["wt.exe", "-d", "C:/Users/nggro"])
+        self.assertEqual(fallback[-1], "Set-Location -LiteralPath 'C:/Users/nggro'")
+
+    def test_terminal_keeps_a_repo_directory_that_exists(self) -> None:
+        entry = {
+            "command": ["wt.exe", "-d", "${gitRepo}"],
+            "directoryFallback": "C:/Users/nggro",
+        }
+        config = {"gitRepo": "C:/Windows"}
+        command = _directory_fallback(entry, _arguments(entry["command"], config), config)
+        self.assertEqual(command, ["wt.exe", "-d", "C:/Windows"])
+
+    def test_commands_without_a_directory_fallback_keep_a_missing_path(self) -> None:
+        entry = {"command": ["explorer.exe", "${gitRepo}"]}
+        config = {"gitRepo": "C:/missing/platformer"}
+        command = _directory_fallback(entry, _arguments(entry["command"], config), config)
+        self.assertEqual(command, ["explorer.exe", "C:/missing/platformer"])
 
     def test_file_entry_refuses_a_missing_path(self) -> None:
         with self.assertRaises(FileNotFoundError):

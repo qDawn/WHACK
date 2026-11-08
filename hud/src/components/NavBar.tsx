@@ -14,6 +14,7 @@ type NavBarProps = {
   sidebarVisible: boolean;
   onSidebarVisible: (visible: boolean) => void;
   onOpenModelDiagnostics: () => void;
+  onAddWidget: () => void;
 };
 
 type PopoverBox = {
@@ -56,7 +57,7 @@ function popoverBox(anchor: HTMLElement, height: number): PopoverBox {
 }
 
 const NavBar = forwardRef<NavBarHandle, NavBarProps>(function NavBar(
-  { editMode, snap, animations, layoutError, onToggleEdit, onToggleSnap, onToggleAnimations, onReset, sidebarVisible, onSidebarVisible, onOpenModelDiagnostics },
+  { editMode, snap, animations, layoutError, onToggleEdit, onToggleSnap, onToggleAnimations, onReset, sidebarVisible, onSidebarVisible, onOpenModelDiagnostics, onAddWidget },
   ref,
 ) {
   const rootRef = useRef<HTMLElement>(null);
@@ -212,6 +213,21 @@ const NavBar = forwardRef<NavBarHandle, NavBarProps>(function NavBar(
 
   return (
     <nav ref={rootRef} className="nav-bar glass-panel float-panel" data-region="nav" aria-label="Aura">
+      <button
+        type="button"
+        className="nav-bar__button"
+        data-nav="add-widget"
+        aria-label="Add a widget"
+        title="Add a widget"
+        onClick={onAddWidget}
+      >
+        <NavIcon>
+          <path d="M12 5v14M5 12h14" />
+        </NavIcon>
+        <span className="nav-bar__tooltip" aria-hidden="true">
+          Add a widget
+        </span>
+      </button>
       {controls.map((control) => (
         <Fragment key={control.id}>
           {control.id === "edit" ? <span className="nav-bar__divider" aria-hidden="true" /> : null}

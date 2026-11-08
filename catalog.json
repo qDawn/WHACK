@@ -2,18 +2,35 @@
   "entries": [
     {
       "id": "open_godot",
-      "title": "Godot",
+      "title": "Godot coursework",
       "detail": "${godotProject}",
-      "method": "file",
-      "target": "${godotProject}"
+      "method": "command",
+      "command": ["${godotEditor}", "--editor", "--path", "${godotProjectDir}"]
+    },
+    {
+      "id": "open_godot_editor",
+      "title": "Godot",
+      "detail": "Godot",
+      "method": "command",
+      "command": ["${godotEditor}", "--project-manager"]
     },
     {
       "id": "open_terminal",
       "title": "Terminal",
       "detail": "${gitRepo}",
       "method": "command",
-      "command": ["wt.exe", "-d", "${gitRepo}"],
-      "fallback": ["powershell.exe", "-NoExit", "-Command", "Set-Location -LiteralPath '${gitRepo}'"]
+      "command": [
+        "wt.exe",
+        "-d",
+        "${gitRepo}"
+      ],
+      "directoryFallback": "C:\\Users\\nggro",
+      "fallback": [
+        "powershell.exe",
+        "-NoExit",
+        "-Command",
+        "Set-Location -LiteralPath '${gitRepo}'"
+      ]
     },
     {
       "id": "focus_discord",
@@ -37,13 +54,6 @@
       "target": "cursor:"
     },
     {
-      "id": "open_chrome",
-      "title": "Chrome",
-      "detail": "Google Chrome",
-      "method": "command",
-      "command": ["cmd.exe", "/c", "start", "", "chrome"]
-    },
-    {
       "id": "open_edge",
       "title": "Edge",
       "detail": "Microsoft Edge",
@@ -51,39 +61,41 @@
       "target": "microsoft-edge:"
     },
     {
-      "id": "open_firefox",
-      "title": "Firefox",
-      "detail": "Firefox",
-      "method": "command",
-      "command": ["cmd.exe", "/c", "start", "", "firefox"]
-    },
-    {
       "id": "open_explorer",
       "title": "File Explorer",
       "detail": "${gitRepo}",
       "method": "command",
-      "command": ["explorer.exe", "${gitRepo}"]
+      "command": [
+        "explorer.exe",
+        "${gitRepo}"
+      ]
     },
     {
       "id": "open_notepad",
       "title": "Notepad",
       "detail": "Notepad",
       "method": "command",
-      "command": ["notepad.exe"]
+      "command": [
+        "notepad.exe"
+      ]
     },
     {
       "id": "open_calculator",
       "title": "Calculator",
       "detail": "Calculator",
       "method": "command",
-      "command": ["calc.exe"]
+      "command": [
+        "calc.exe"
+      ]
     },
     {
       "id": "open_paint",
       "title": "Paint",
       "detail": "Paint",
       "method": "command",
-      "command": ["mspaint.exe"]
+      "command": [
+        "mspaint.exe"
+      ]
     },
     {
       "id": "open_snipping",
@@ -111,7 +123,9 @@
       "title": "Task Manager",
       "detail": "Task Manager",
       "method": "command",
-      "command": ["taskmgr.exe"]
+      "command": [
+        "taskmgr.exe"
+      ]
     },
     {
       "id": "open_store",
@@ -135,27 +149,6 @@
       "target": "microsoft.windows.camera:"
     },
     {
-      "id": "open_maps",
-      "title": "Maps",
-      "detail": "Maps",
-      "method": "link",
-      "target": "bingmaps:"
-    },
-    {
-      "id": "open_mail",
-      "title": "Mail",
-      "detail": "Mail",
-      "method": "link",
-      "target": "outlookmail:"
-    },
-    {
-      "id": "open_calendar",
-      "title": "Calendar",
-      "detail": "Calendar",
-      "method": "link",
-      "target": "outlookcal:"
-    },
-    {
       "id": "open_spotify",
       "title": "Spotify",
       "detail": "Spotify",
@@ -168,13 +161,6 @@
       "detail": "Steam",
       "method": "link",
       "target": "steam:"
-    },
-    {
-      "id": "open_slack",
-      "title": "Slack",
-      "detail": "Slack",
-      "method": "link",
-      "target": "slack:"
     },
     {
       "id": "open_teams",
@@ -191,32 +177,31 @@
       "target": "whatsapp:"
     },
     {
-      "id": "open_telegram",
-      "title": "Telegram",
-      "detail": "Telegram",
-      "method": "link",
-      "target": "tg:"
-    },
-    {
       "id": "open_word",
       "title": "Word",
       "detail": "Microsoft Word",
-      "method": "link",
-      "target": "ms-word:"
+      "method": "command",
+      "command": [
+        "C:\\Program Files\\Microsoft Office\\root\\Office16\\WINWORD.EXE"
+      ]
     },
     {
       "id": "open_excel",
       "title": "Excel",
       "detail": "Microsoft Excel",
-      "method": "link",
-      "target": "ms-excel:"
+      "method": "command",
+      "command": [
+        "C:\\Program Files\\Microsoft Office\\root\\Office16\\EXCEL.EXE"
+      ]
     },
     {
       "id": "open_powerpoint",
       "title": "PowerPoint",
       "detail": "PowerPoint",
-      "method": "link",
-      "target": "ms-powerpoint:"
+      "method": "command",
+      "command": [
+        "C:\\Program Files\\Microsoft Office\\root\\Office16\\POWERPNT.EXE"
+      ]
     },
     {
       "id": "open_onenote",
@@ -230,28 +215,19 @@
       "title": "PowerShell",
       "detail": "PowerShell",
       "method": "command",
-      "command": ["powershell.exe", "-NoExit"]
+      "command": [
+        "powershell.exe",
+        "-NoExit"
+      ]
     },
     {
       "id": "open_command",
       "title": "Command Prompt",
       "detail": "Command Prompt",
       "method": "command",
-      "command": ["cmd.exe"]
-    },
-    {
-      "id": "open_notion",
-      "title": "Notion",
-      "detail": "Notion",
-      "method": "link",
-      "target": "notion:"
-    },
-    {
-      "id": "open_figma",
-      "title": "Figma",
-      "detail": "Figma",
-      "method": "link",
-      "target": "figma:"
+      "command": [
+        "cmd.exe"
+      ]
     }
   ]
 }

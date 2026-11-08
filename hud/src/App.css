@@ -113,7 +113,6 @@ html[data-hud-visible="false"] .dashboard {
 }
 
 .dashboard[data-animations="true"] .stage-veil,
-.dashboard[data-animations="true"] .workspace__prompt,
 .dashboard[data-animations="true"] .panel-frame[data-panel="nav"],
 .dashboard[data-animations="true"] .panel-frame[data-panel="window-stack"],
 .dashboard[data-animations="true"] .panel-frame[data-panel="suggestions"],
@@ -128,8 +127,7 @@ html[data-hud-visible="false"] .dashboard {
 .dashboard[data-animations="true"] .panel-frame[data-panel="window-stack"],
 .dashboard[data-animations="true"] .panel-frame[data-panel="suggestions"],
 .dashboard[data-animations="true"] .panel-frame[data-panel="quick-note"],
-.dashboard[data-animations="true"] .panel-frame[data-widget="true"],
-.dashboard[data-animations="true"] .workspace__prompt {
+.dashboard[data-animations="true"] .panel-frame[data-widget="true"] {
   opacity: 1;
   transform: none;
 }
@@ -153,11 +151,6 @@ html[data-hud-visible="false"] .dashboard {
 .dashboard[data-animations="true"][data-motion="closed"] .panel-frame[data-widget="true"] {
   opacity: 0;
   transform: translateY(40px);
-}
-
-.dashboard[data-animations="true"][data-motion="closed"] .workspace__prompt {
-  opacity: 0;
-  pointer-events: none;
 }
 
 .dashboard[data-animations="true"][data-motion="open"] .stage-veil {
@@ -552,51 +545,6 @@ html[data-hud-visible="false"] .dashboard {
 .dashboard[data-editing="true"] .window-card,
 .dashboard[data-editing="true"] .window-card__close {
   cursor: pointer;
-}
-
-.workspace {
-  position: absolute;
-  z-index: 0;
-  top: var(--stage-inset);
-  right: var(--stage-inset);
-  bottom: var(--stage-inset);
-  left: var(--stage-inset);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  overflow: hidden;
-  pointer-events: none;
-}
-
-.workspace__prompt {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  gap: 12px;
-  max-width: 260px;
-  padding: 16px 18px 14px;
-  pointer-events: auto;
-}
-
-.workspace__text {
-  margin: 0;
-  max-width: 240px;
-  color: var(--ink-soft);
-  font-size: 14px;
-  line-height: 1.45;
-  text-align: center;
-}
-
-.workspace__add {
-  width: 36px;
-  height: 36px;
-  display: grid;
-  place-items: center;
-  padding: 0;
-  border: 1px solid rgba(255, 255, 255, 0.9);
-  border-radius: 999px;
-  background: var(--silver);
-  color: var(--ink);
 }
 
 .suggestions {
@@ -1689,7 +1637,6 @@ html[data-hud-visible="false"] .dashboard {
   .nav-bar__tooltip,
   .suggestion-preview,
   .dashboard[data-animations="true"] .stage-veil,
-  .dashboard[data-animations="true"] .workspace__prompt,
   .dashboard[data-animations="true"] .panel-frame[data-panel="nav"],
   .dashboard[data-animations="true"] .panel-frame[data-panel="window-stack"],
   .dashboard[data-animations="true"] .panel-frame[data-panel="suggestions"],
@@ -1704,8 +1651,7 @@ html[data-hud-visible="false"] .dashboard {
   .dashboard[data-animations="true"][data-motion="closed"] .panel-frame[data-panel="window-stack"],
   .dashboard[data-animations="true"][data-motion="closed"] .panel-frame[data-panel="suggestions"],
   .dashboard[data-animations="true"][data-motion="closed"] .panel-frame[data-panel="quick-note"],
-  .dashboard[data-animations="true"][data-motion="closed"] .panel-frame[data-widget="true"],
-  .dashboard[data-animations="true"][data-motion="closed"] .workspace__prompt {
+  .dashboard[data-animations="true"][data-motion="closed"] .panel-frame[data-widget="true"] {
     transform: none;
     opacity: 1;
     pointer-events: auto;

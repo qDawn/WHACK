@@ -14,7 +14,6 @@ import QuickNote from "./QuickNote";
 import Suggestions, { type ActionCard, type SuggestionError, type SuggestionsHandle } from "./Suggestions";
 import WidgetLibrary, { type HiddenPiece } from "./WidgetLibrary";
 import WindowStack, { type WindowStackHandle } from "./WindowStack";
-import Workspace from "./Workspace";
 
 type DashboardStageProps = {
   dashboard: DashboardController;
@@ -224,7 +223,6 @@ export default function DashboardStage({
 
   return (
     <>
-      <Workspace onAdd={() => setLibraryOpen(true)} />
       {layout && stage
         ? PANEL_IDS.map((id) => {
             if (id === "nav") {
@@ -257,6 +255,7 @@ export default function DashboardStage({
                     sidebarVisible={nav.visible}
                     onSidebarVisible={dashboard.setNavVisible}
                     onOpenModelDiagnostics={() => setDiagnosticsOpen(true)}
+                    onAddWidget={() => setLibraryOpen(true)}
                   />
                 </PanelFrame>
               );

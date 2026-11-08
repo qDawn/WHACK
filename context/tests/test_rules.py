@@ -99,6 +99,15 @@ class RuleMatchTests(unittest.TestCase):
         assert platformer is not None
         self.assertEqual(platformer["kind"], "open_godot")
 
+        coursework = first_match(snapshot("open the coursework"), rules, config)
+        assert coursework is not None
+        self.assertEqual(coursework["kind"], "open_godot")
+        self.assertEqual(coursework["detail"], str(config["godotProject"]))
+
+        editor = first_match(snapshot("launch godot"), rules, config)
+        assert editor is not None
+        self.assertEqual(editor["kind"], "open_godot_editor")
+
         spotify = first_match(snapshot("put on spotify"), rules, config)
         assert spotify is not None
         self.assertEqual(spotify["kind"], "open_spotify")
