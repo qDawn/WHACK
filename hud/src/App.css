@@ -2,6 +2,8 @@
   /* Keep in step with GLASS_MARGIN_CSS / GLASS_RADIUS_CSS in src-tauri/src/glass.rs. */
   --glass-margin: 32px;
   --glass-radius: 28px;
+  /* White veil over the blurred desktop. Lower it to see more of the blur. */
+  --glass-tint: rgba(255, 255, 255, 0.18);
   --stage-inset: 28px;
   --sheet-content: calc(100vh - (var(--glass-margin) + var(--stage-inset)) * 2);
   --nav-height: 56px;
@@ -81,7 +83,19 @@ textarea:focus-visible {
   inset: 0;
   border-radius: inherit;
   pointer-events: none;
-  background: rgba(255, 255, 255, 0.28);
+  background-color: rgba(255, 255, 255, 0.45);
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: 100% 100%;
+}
+
+.glass-sheet::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border-radius: inherit;
+  background: var(--glass-tint);
+  pointer-events: none;
 }
 
 html[data-hud-visible="false"] .dashboard {
@@ -94,7 +108,7 @@ html[data-hud-visible="false"] .dashboard {
   z-index: 0;
   border-radius: inherit;
   pointer-events: none;
-  background: rgba(255, 255, 255, 0.12);
+  background: rgba(255, 255, 255, 0.08);
   opacity: 0;
 }
 
@@ -1100,9 +1114,31 @@ html[data-hud-visible="false"] .dashboard {
 
 .panel-frame__settings {
   position: absolute;
-  top: -28px;
-  right: 0;
+  top: 8px;
+  right: 8px;
   z-index: 6;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.panel-frame[data-panel="window-stack"] .window-stack,
+.panel-frame[data-panel="suggestions"] .suggestions {
+  padding-top: 36px;
+}
+
+.panel-frame[data-widget="true"] .shortcut-widget {
+  padding-top: 36px;
+}
+
+.panel-frame .quick-note[data-open="true"] .quick-note__heading,
+.panel-frame .quick-note__toggle {
+  padding-right: 36px;
+}
+
+.dashboard[data-editing="true"] .panel-frame .quick-note[data-open="true"] .quick-note__heading,
+.dashboard[data-editing="true"] .panel-frame .quick-note__toggle {
+  padding-right: 112px;
 }
 
 .panel-frame__gear,

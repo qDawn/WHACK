@@ -29,6 +29,11 @@ struct HudClosing {
     generation: u64,
 }
 
+#[derive(Clone, serde::Serialize)]
+struct GlassBackdrop {
+    image: String,
+}
+
 struct DismissGate {
     generation: u64,
     closing: bool,
@@ -230,6 +235,19 @@ fn fit_cursor_monitor(window: &tauri::WebviewWindow) -> bool {
     true
 }
 
+fn emit_backdrop(app: &tauri::AppHandle, window: &tauri::WebviewWindow) {
+    let Some(monitor) = monitor_under_cursor(window) else {
+        return;
+    };
+    let origin = monitor.position();
+    let size = monitor.size();
+    let scale = window.scale_factor().unwrap_or(1.0);
+    let Some(image) = glass::capture_backdrop(origin.x, origin.y, size.width, size.height, scale) else {
+        return;
+    };
+    let _ = app.emit("glass-backdrop", GlassBackdrop { image });
+}
+
 fn apply_glass_blur(window: &tauri::WebviewWindow, width: u32, height: u32) {
     let Ok(hwnd) = window.hwnd() else {
         return;
@@ -254,6 +272,9 @@ fn apply_visible(app: &tauri::AppHandle, visible: bool) {
     };
     if visible {
         fit_cursor_monitor(&window);
+        // Grab the desktop before the window covers it. A later fit must not
+        // capture Aura itself.
+        emit_backdrop(app, &window);
         let _ = window.show();
         // The taskbar is also topmost; set this again after show so Aura is above it.
         // The window still covers the monitor. The blur region is inset; the margin

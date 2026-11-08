@@ -64,7 +64,7 @@ type PanelFrameProps = {
   onRestore: () => void;
   /** Sidebar visibility. Hides the gear menu and slides the frame instead of minimising it. */
   sidebar?: SidebarControl;
-  /** Hide and Minimise for dashboard panels. Widgets never show those controls. */
+  /** Hide, in the cog menu. Widgets minimise from the cog and do not offer Hide. */
   showMenu?: boolean;
   widget?: boolean;
   /** Edit-mode removal for a widget instance. */
@@ -134,7 +134,6 @@ export default function PanelFrame({
   const gearRef = useRef<HTMLButtonElement>(null);
   const dragRef = useRef<DragSession | null>(null);
   const resizeRef = useRef<ResizeSession | null>(null);
-  const [hover, setHover] = useState(false);
   const [dragging, setDragging] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuBox, setMenuBox] = useState<{ top: number; left: number } | null>(null);
@@ -143,12 +142,15 @@ export default function PanelFrame({
     () => sidebarOn && window.matchMedia("(prefers-reduced-motion: reduce)").matches,
   );
   const [metrics, setMetrics] = useState({ left: 0, top: 0, width: 0, screen: 0 });
-  const showSettings = showMenu && !widget && !sidebarOn && (hover || menuOpen || (editMode && selected));
   const anchor = box.anchor;
 
   useEffect(() => {
     setMenuOpen(false);
   }, [visibility]);
+
+  useEffect(() => {
+    if (widget && editMode) setMenuOpen(false);
+  }, [widget, editMode]);
 
   useEffect(() => {
     if (editMode) return;
@@ -336,7 +338,8 @@ export default function PanelFrame({
   const motion = sidebar ? sidebarMotion(sidebar.visible, sidebar.animations, reduceMotion) : null;
   const shift = motion && !motion.visible && measured ? sidebarOffscreenX(edge, originX, metrics.width, screen) : 0;
   const expanded = sidebar ? sidebar.visible : visibility === "visible";
-  const showRemove = widget && editMode && expanded && onRemove !== undefined;
+  const showCog = !sidebarOn && expanded && (!widget || !editMode);
+  const showRemove = !sidebarOn && editMode && expanded && onRemove !== undefined;
   const minimised = !sidebar && visibility === "minimised";
 
   const style: CSSProperties = { left: box.left, zIndex };
@@ -364,17 +367,19 @@ export default function PanelFrame({
                 Minimise
               </button>
             ) : null}
-            <button
-              type="button"
-              className="glass-menu__item"
-              role="menuitem"
-              onClick={() => {
-                setMenuOpen(false);
-                onHide();
-              }}
-            >
-              Hide
-            </button>
+            {showMenu ? (
+              <button
+                type="button"
+                className="glass-menu__item"
+                role="menuitem"
+                onClick={() => {
+                  setMenuOpen(false);
+                  onHide();
+                }}
+              >
+                Hide
+              </button>
+            ) : null}
           </div>,
           document.body,
         )
@@ -394,8 +399,6 @@ export default function PanelFrame({
       data-sidebar={sidebar ? (sidebar.visible ? "on" : "off") : undefined}
       data-anchor={anchor}
       data-open={open === undefined ? undefined : open ? "true" : "false"}
-      onPointerEnter={() => setHover(true)}
-      onPointerLeave={() => setHover(false)}
       onPointerDown={onPointerDown}
       onPointerMove={onPointerMove}
       onPointerUp={endPointer}
@@ -448,27 +451,27 @@ export default function PanelFrame({
           onPointerCancel={endResize}
         />
       ) : null}
-      {showSettings ? (
-        <div className="panel-frame__settings">
-          <button
-            ref={gearRef}
-            type="button"
-            className="panel-frame__gear"
-            data-no-drag
-            aria-label={`${label} settings`}
-            aria-expanded={menuOpen}
-            aria-haspopup="menu"
-            onClick={toggleGear}
-          >
-            <GearIcon />
-          </button>
-        </div>
-      ) : null}
-      {showRemove ? (
-        <div className="panel-frame__settings">
-          <button type="button" className="panel-frame__remove" data-no-drag aria-label={`Remove ${label}`} onClick={() => onRemove?.()}>
-            Remove
-          </button>
+      {showCog || showRemove ? (
+        <div className="panel-frame__settings" data-no-drag>
+          {showRemove ? (
+            <button type="button" className="panel-frame__remove" data-no-drag aria-label={`Remove ${label}`} onClick={() => onRemove?.()}>
+              Remove
+            </button>
+          ) : null}
+          {showCog ? (
+            <button
+              ref={gearRef}
+              type="button"
+              className="panel-frame__gear"
+              data-no-drag
+              aria-label={`${label} settings`}
+              aria-expanded={menuOpen}
+              aria-haspopup="menu"
+              onClick={toggleGear}
+            >
+              <GearIcon />
+            </button>
+          ) : null}
         </div>
       ) : null}
       {menu}

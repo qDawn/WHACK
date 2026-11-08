@@ -36,6 +36,24 @@ type DashboardStageProps = {
 
 const NOTE_HINT = "Restore another piece first. The quick note cannot be the only one showing.";
 
+type RemovalKind = "widget" | "panel" | "note";
+
+type PendingRemoval = {
+  id: string;
+  title: string;
+  kind: RemovalKind;
+};
+
+function removalDetail(kind: RemovalKind): string {
+  if (kind === "widget") {
+    return "Keep configuration takes this widget off the stage and leaves its saved shortcuts. Delete configuration removes those shortcuts as well.";
+  }
+  if (kind === "note") {
+    return "Keep configuration hides the note and leaves the text and its size. Delete configuration hides the note, clears the text, and restores the default size.";
+  }
+  return "Keep configuration hides this and remembers where you put it. Delete configuration hides it and restores its default place.";
+}
+
 type KeyRegion = "windows" | "suggestions";
 
 function isTypingTarget(target: EventTarget | null): boolean {
@@ -61,11 +79,11 @@ export default function DashboardStage({
 }: DashboardStageProps) {
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
-  const [pendingRemoval, setPendingRemoval] = useState<string | null>(null);
+  const [pendingRemoval, setPendingRemoval] = useState<PendingRemoval | null>(null);
   const [keyRegion, setKeyRegion] = useState<KeyRegion | null>(null);
   const libraryOpenRef = useRef(false);
   const diagnosticsOpenRef = useRef(false);
-  const pendingRemovalRef = useRef<string | null>(null);
+  const pendingRemovalRef = useRef<PendingRemoval | null>(null);
   const keyRegionRef = useRef<KeyRegion | null>(null);
   const navRef = useRef<NavBarHandle>(null);
   const windowsRef = useRef<WindowStackHandle>(null);
@@ -198,8 +216,11 @@ export default function DashboardStage({
     };
   }
 
-  const pending = layout?.widgets.find((widget) => widget.id === pendingRemoval) ?? null;
-  const pendingTitle = pending ? (widgetByType(pending.type)?.title ?? "widget") : "";
+  function askRemoval(id: string, title: string, kind: RemovalKind) {
+    setPendingRemoval({ id, title, kind });
+  }
+
+  const pending = pendingRemoval;
 
   return (
     <>
@@ -262,6 +283,7 @@ export default function DashboardStage({
                   open={noteOpen}
                   onResize={dashboard.resizeNote}
                   onResizeStart={() => onNoteOpenChange(true)}
+                  onRemove={() => askRemoval(id, PANEL_LABELS[id], "note")}
                   {...bind(id)}
                 >
                   <QuickNote
@@ -293,7 +315,16 @@ export default function DashboardStage({
                 />
               );
             return (
-              <PanelFrame key={id} id={id} label={PANEL_LABELS[id]} visibility={placement.visibility} zIndex={placement.z} box={box} {...bind(id)}>
+              <PanelFrame
+                key={id}
+                id={id}
+                label={PANEL_LABELS[id]}
+                visibility={placement.visibility}
+                zIndex={placement.z}
+                box={box}
+                onRemove={() => askRemoval(id, PANEL_LABELS[id], "panel")}
+                {...bind(id)}
+              >
                 {child}
               </PanelFrame>
             );
@@ -333,7 +364,7 @@ export default function DashboardStage({
                   showMenu={false}
                   widget
                   {...bind(instance.id)}
-                  onRemove={() => setPendingRemoval(instance.id)}
+                  onRemove={() => askRemoval(instance.id, registration.title, "widget")}
                 >
                   <div className="widget-host">
                     <Widget instanceId={instance.id} />
@@ -359,13 +390,19 @@ export default function DashboardStage({
       ) : null}
       {pending ? (
         <WidgetRemoveDialog
-          title={pendingTitle}
+          title={pending.title}
+          detail={removalDetail(pending.kind)}
           onKeep={() => {
-            dashboard.removeWidget(pending.id, "keep");
+            if (pending.kind === "widget") dashboard.removeWidget(pending.id, "keep");
+            else dashboard.removePanel(pending.id, "keep");
             setPendingRemoval(null);
           }}
           onDelete={() => {
-            dashboard.removeWidget(pending.id, "delete");
+            if (pending.kind === "widget") dashboard.removeWidget(pending.id, "delete");
+            else {
+              dashboard.removePanel(pending.id, "delete");
+              if (pending.kind === "note") onNoteChange("");
+            }
             setPendingRemoval(null);
           }}
           onCancel={() => setPendingRemoval(null)}
@@ -377,11 +414,13 @@ export default function DashboardStage({
 
 function WidgetRemoveDialog({
   title,
+  detail,
   onKeep,
   onDelete,
   onCancel,
 }: {
   title: string;
+  detail: string;
   onKeep: () => void;
   onDelete: () => void;
   onCancel: () => void;
@@ -396,9 +435,7 @@ function WidgetRemoveDialog({
         onPointerDown={(event) => event.stopPropagation()}
       >
         <h2 className="widget-remove__title">Remove {title}</h2>
-        <p className="widget-remove__text">
-          Keep configuration takes this widget off the stage and leaves its saved shortcuts. Delete configuration removes those shortcuts as well.
-        </p>
+        <p className="widget-remove__text">{detail}</p>
         <div className="widget-remove__actions">
           <button type="button" className="glass-menu__item" onClick={onKeep}>
             Keep configuration

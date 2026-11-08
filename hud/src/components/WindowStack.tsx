@@ -119,7 +119,13 @@ const WindowStack = forwardRef<WindowStackHandle>(function WindowStack(props, re
   const refreshRef = useRef<(force: boolean) => void>(() => {});
   const layoutStepRef = useRef(1);
   const suppressClickRef = useRef(false);
-  const dragRef = useRef<{ pointerId: number; startX: number; startIndex: number; scrubbed: boolean } | null>(null);
+  const dragRef = useRef<{
+    pointerId: number;
+    startX: number;
+    startIndex: number;
+    cardIndex: number | null;
+    scrubbed: boolean;
+  } | null>(null);
 
   const [phase, setPhase] = useState<Phase>(inApp ? "reading" : "error");
   const [windows, setWindows] = useState<ListedWindow[]>([]);
@@ -489,12 +495,38 @@ const WindowStack = forwardRef<WindowStackHandle>(function WindowStack(props, re
     }
   }
 
-  function endDrag(event: React.PointerEvent<HTMLDivElement>) {
+  function cardIndexFrom(target: EventTarget | null): number | null {
+    if (!(target instanceof Element)) return null;
+    const card = target.closest(".window-card");
+    if (!(card instanceof HTMLElement)) return null;
+    const index = Number(card.dataset.index);
+    return Number.isInteger(index) ? index : null;
+  }
+
+  function pressCard(cardIndex: number) {
+    const decision = pointerResolution("click", indexRef.current, cardIndex);
+    selectIndex(decision.selectedIndex);
+    if (!decision.activate) return;
+    const hwnd = windowsRef.current[decision.selectedIndex]?.hwnd;
+    if (hwnd) void activateWindow(hwnd);
+  }
+
+  function finishDrag(event: React.PointerEvent<HTMLDivElement>, activate: boolean) {
     const drag = dragRef.current;
     if (!drag || drag.pointerId !== event.pointerId) return;
-    if (drag.scrubbed) suppressClickRef.current = true;
+    const scrubbed = drag.scrubbed;
+    const cardIndex = drag.cardIndex;
     dragRef.current = null;
     setScrubbing(false);
+    if (scrubbed || !activate || cardIndex === null) {
+      if (scrubbed) suppressClickRef.current = true;
+      return;
+    }
+    const target = event.target;
+    if (target instanceof Element && target.closest(".window-card__close")) return;
+    // The click that follows this pointerup would activate the card a second time.
+    suppressClickRef.current = true;
+    pressCard(cardIndex);
   }
 
   function onStripPointerDown(event: React.PointerEvent<HTMLDivElement>) {
@@ -507,9 +539,11 @@ const WindowStack = forwardRef<WindowStackHandle>(function WindowStack(props, re
       pointerId: event.pointerId,
       startX: event.clientX,
       startIndex: indexRef.current,
+      cardIndex: cardIndexFrom(target),
       scrubbed: false,
     };
-    event.currentTarget.setPointerCapture(event.pointerId);
+    // Capturing here retargets the click onto the strip, so the card never receives it.
+    // Capture starts only once the press becomes a drag.
   }
 
   function onStripPointerMove(event: React.PointerEvent<HTMLDivElement>) {
@@ -520,6 +554,9 @@ const WindowStack = forwardRef<WindowStackHandle>(function WindowStack(props, re
       if (Math.abs(dx) < DRAG_SLOP) return;
       drag.scrubbed = true;
       setScrubbing(true);
+      if (!event.currentTarget.hasPointerCapture(event.pointerId)) {
+        event.currentTarget.setPointerCapture(event.pointerId);
+      }
     }
     const next = indexAfterDrag(drag.startIndex, dx, layoutStepRef.current, windowsRef.current.length);
     const decision = pointerResolution("scrub", drag.startIndex, next);
@@ -589,8 +626,8 @@ const WindowStack = forwardRef<WindowStackHandle>(function WindowStack(props, re
           ref={cardsRef}
           onPointerDown={onStripPointerDown}
           onPointerMove={onStripPointerMove}
-          onPointerUp={endDrag}
-          onPointerCancel={endDrag}
+          onPointerUp={(event) => finishDrag(event, true)}
+          onPointerCancel={(event) => finishDrag(event, false)}
         >
           {layout.scroll ? <div className="window-stack__sizer" style={{ width: scrolled.track }} /> : null}
           {windows.map((item, cardIndex) => {
@@ -636,22 +673,14 @@ const WindowStack = forwardRef<WindowStackHandle>(function WindowStack(props, re
                   }
                   const target = event.target;
                   if (target instanceof Element && target.closest(".window-card__close")) return;
-                  const decision = pointerResolution("click", indexRef.current, cardIndex);
-                  selectIndex(decision.selectedIndex);
-                  if (!decision.activate) return;
-                  const hwnd = windowsRef.current[decision.selectedIndex]?.hwnd;
-                  if (hwnd) void activateWindow(hwnd);
+                  pressCard(cardIndex);
                 }}
                 onKeyDown={(event) => {
                   if (event.key !== "Enter" && event.key !== " ") return;
                   if (event.target instanceof Element && event.target.closest(".window-card__close")) return;
                   event.preventDefault();
                   event.stopPropagation();
-                  const decision = pointerResolution("click", indexRef.current, cardIndex);
-                  selectIndex(decision.selectedIndex);
-                  if (!decision.activate) return;
-                  const hwnd = windowsRef.current[decision.selectedIndex]?.hwnd;
-                  if (hwnd) void activateWindow(hwnd);
+                  pressCard(cardIndex);
                 }}
               >
                 {cardImage ? (

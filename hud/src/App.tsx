@@ -92,6 +92,7 @@ export default function App() {
   const motionOnRef = useRef(motionOn);
   motionOnRef.current = motionOn;
   const [pose, setPose] = useState<MotionPose>(runningInTauri() ? "closed" : "open");
+  const [backdrop, setBackdrop] = useState<string | null>(null);
   const closingGeneration = useRef<number | null>(null);
   const exitTimer = useRef(0);
   const openTicket = useRef(0);
@@ -169,12 +170,24 @@ export default function App() {
     let active = true;
     let unlistenVisibility: (() => void) | undefined;
     let unlistenClosing: (() => void) | undefined;
+    let unlistenBackdrop: (() => void) | undefined;
 
     const clearExit = () => {
       window.clearTimeout(exitTimer.current);
       exitTimer.current = 0;
       closingGeneration.current = null;
     };
+
+    listen<{ image?: string }>("glass-backdrop", (event) => {
+      if (!active) return;
+      const image = event.payload.image;
+      if (typeof image === "string" && image.startsWith("data:image/")) {
+        setBackdrop(image);
+      }
+    }).then((stop) => {
+      if (active) unlistenBackdrop = stop;
+      else stop();
+    });
 
     listen<HudVisibility>("hud-visibility", (event) => {
       if (!active) return;
@@ -236,6 +249,7 @@ export default function App() {
       window.clearTimeout(exitTimer.current);
       unlistenVisibility?.();
       unlistenClosing?.();
+      unlistenBackdrop?.();
     };
   }, []);
 
@@ -322,7 +336,11 @@ export default function App() {
         data-animations={motionOn ? "true" : "false"}
         data-motion={pose}
       >
-        <div className="glass-sheet" aria-hidden="true" />
+        <div
+          className="glass-sheet"
+          aria-hidden="true"
+          style={backdrop ? { backgroundImage: `url("${backdrop}")` } : undefined}
+        />
         <div className="stage-veil" aria-hidden="true" />
         <DashboardStage
           dashboard={dashboard}

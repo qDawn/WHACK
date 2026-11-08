@@ -13,7 +13,7 @@ export type WidgetSizeVariant = {
  * `sizes` are fixed CSS pixel boxes. The quick note is the only freely resizable piece.
  * The library lists every registration. `allowMultiple` can place another instance.
  * Without it, one instance can be placed; the row stays visible and does not place a second copy.
- * Widgets use Remove in edit mode. They do not offer Hide or Minimise.
+ * Widgets use Remove in edit mode. The cog minimises them. They do not offer Hide.
  */
 export type WidgetRegistration = {
   type: string;

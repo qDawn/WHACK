@@ -351,6 +351,31 @@ export function setVisibility(layout: LayoutDocument, id: string, shown: Visibil
   return enforceNoteCompany(withVisibility(layout, id, shown));
 }
 
+export type RemovablePanelId = "window-stack" | "suggestions" | "quick-note";
+
+/**
+ * Keep hides the panel and leaves its place. Delete hides it and copies the
+ * default place for that panel. Cancel returns the same layout. The sidebar
+ * is not removable here.
+ */
+export function applyPanelRemoval(
+  layout: LayoutDocument,
+  id: RemovablePanelId,
+  choice: "keep" | "delete" | "cancel",
+  defaults: LayoutDocument,
+): LayoutDocument {
+  if (choice === "cancel") return layout;
+  if (choice === "keep") return setVisibility(layout, id, "hidden");
+  const fresh = defaults.panels[id];
+  return enforceNoteCompany({
+    ...layout,
+    panels: {
+      ...layout.panels,
+      [id]: { ...fresh, visibility: "hidden" },
+    },
+  });
+}
+
 export function place(layout: LayoutDocument, id: string, xPx: number, yPx: number, stage: StageSize): LayoutDocument {
   const point = clampStagePoint(xPx, yPx, stage);
   const x = clamp(point.x / stage.width, 0, 1);

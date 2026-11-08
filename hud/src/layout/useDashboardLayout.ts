@@ -3,6 +3,7 @@ import { useEffect, useRef, useState, type RefObject } from "react";
 import { runningInTauri } from "../tauri";
 import { defaultLayout } from "./defaults";
 import {
+  applyPanelRemoval,
   bringToFront,
   noteCanBeVisible,
   parseLayout,
@@ -65,6 +66,8 @@ export type DashboardController = {
   reorderShortcut: (sourceId: string, targetId: string) => void;
   addWidget: (type: string, variant: string) => void;
   removeWidget: (id: string, choice: "keep" | "delete") => void;
+  /** Hide a built-in panel. Keep leaves its place. Delete restores the default place. */
+  removePanel: (id: string, choice: "keep" | "delete") => void;
   restoreWidget: (id: string) => void;
   widgetState: WidgetStateDocument;
   setShortcutVariant: (instanceId: string, variant: string) => void;
@@ -326,6 +329,17 @@ export function useDashboardLayout(): DashboardController {
     if (next.widgetState !== widgetState) changeWidgetState(() => next.widgetState);
   }
 
+  function removePanel(id: string, choice: "keep" | "delete") {
+    if (!layout) return;
+    if (id !== "window-stack" && id !== "suggestions" && id !== "quick-note") return;
+    const measured = stageNow();
+    if (!measured) return;
+    const next = applyPanelRemoval(layout, id, choice, defaultLayout(measured, window.innerWidth, window.innerHeight));
+    if (next === layout) return;
+    setSelectedId((current) => (current === id ? null : current));
+    setLayout(next);
+  }
+
   function removeWidget(id: string, choice: "keep" | "delete") {
     if (!layout) return;
     const next = applyWidgetRemoval(layout, widgetState, id, choice);
@@ -401,6 +415,7 @@ export function useDashboardLayout(): DashboardController {
     reorderShortcut: reorder,
     addWidget,
     removeWidget,
+    removePanel,
     restoreWidget,
     widgetState,
     setShortcutVariant,

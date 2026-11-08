@@ -1,5 +1,5 @@
 import { resetDashboard, defaultLayout } from "./defaults";
-import { parseLayout, pinShortcut, place, serializeLayout, setNavVisible, setVisibility } from "./document";
+import { applyPanelRemoval, parseLayout, pinShortcut, place, resizeNote, serializeLayout, setNavVisible, setVisibility } from "./document";
 import { SIDEBAR_SLIDE_MS, sidebarEdge, sidebarMotion, sidebarOffscreenX } from "./sidebar";
 import type { LayoutDocument } from "./types";
 
@@ -147,5 +147,30 @@ check(sidebarEdge(500, 1000) === "right", "center and the right half slide right
 check(sidebarEdge(900, 200) === "right", "right half slides right");
 check(sidebarOffscreenX("left", 28, 180, 1440) === -(28 + 180), "left slide clears the screen edge");
 check(sidebarOffscreenX("right", 900, 180, 1440) === 1440 - 900, "right slide clears the screen edge");
+
+const defaults = defaultLayout(stage, 1440, 900);
+const movedSuggestions = place(defaults, "suggestions", 480, 240, stage);
+check(movedSuggestions.panels.suggestions.x !== defaults.panels.suggestions.x, "the moved suggestions panel has left the default place");
+const keptPanel = applyPanelRemoval(movedSuggestions, "suggestions", "keep", defaults);
+check(keptPanel.panels.suggestions.visibility === "hidden", "keep hides suggestions");
+check(keptPanel.panels.suggestions.x === movedSuggestions.panels.suggestions.x, "keep leaves the suggestions place");
+check(keptPanel.panels.suggestions.y === movedSuggestions.panels.suggestions.y, "keep leaves the suggestions y");
+check(applyPanelRemoval(movedSuggestions, "suggestions", "cancel", movedSuggestions) === movedSuggestions, "cancel returns the same layout");
+
+const deletedPanel = applyPanelRemoval(movedSuggestions, "suggestions", "delete", defaults);
+check(deletedPanel.panels.suggestions.visibility === "hidden", "delete hides suggestions");
+check(deletedPanel.panels.suggestions.x === defaults.panels.suggestions.x, "delete restores the default suggestions place");
+check(deletedPanel.panels.suggestions.y === defaults.panels.suggestions.y, "delete restores the default suggestions y");
+check(deletedPanel.panels["window-stack"].x === movedSuggestions.panels["window-stack"].x, "delete leaves the window stack");
+
+const sized = resizeNote(defaultLayout(stage, 1440, 900), 520, 360, stage);
+check(sized.panels["quick-note"].width !== defaults.panels["quick-note"].width, "the resized note is not already the default width");
+const keptNote = applyPanelRemoval(sized, "quick-note", "keep", defaults);
+check(keptNote.panels["quick-note"].visibility === "hidden", "keep hides the note");
+check(keptNote.panels["quick-note"].width === sized.panels["quick-note"].width, "keep leaves the note size");
+const deletedNote = applyPanelRemoval(sized, "quick-note", "delete", defaults);
+check(deletedNote.panels["quick-note"].visibility === "hidden", "delete hides the note");
+check(deletedNote.panels["quick-note"].width === defaults.panels["quick-note"].width, "delete restores the default note width");
+check(deletedNote.panels["quick-note"].height === defaults.panels["quick-note"].height, "delete restores the default note height");
 
 console.log("nav visibility tests passed");
