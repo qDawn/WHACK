@@ -1,6 +1,6 @@
-# Tauri + React + Typescript
+# Aura HUD
 
-This template should help get you started developing with Tauri, React and Typescript in Vite.
+This folder is the Aura window: Tauri 2, React, and TypeScript. The project overview and how to start the demo are in the [parent README](../README.md). Run `npm run tauri dev` from here, with the Python watcher already running in the repo root. `start-demo.bat` starts both.
 
 ## Recommended IDE Setup
 
