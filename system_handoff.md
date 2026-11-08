@@ -1,6 +1,7 @@
 # Aura system handoff
 
-**Read this file first.** It describes the system as of 7 November 2026.
+**Read this file first.** It describes the system as of 7 November 2026 20:38.
+**Most recent log:** `ui_handoff.md` at **2026-11-07T22:27:33Z**. Give that file to the UI overhaul. `history_handoff.md` at 2026-11-07T21:05:00Z still covers the focus database, the catalog, and the OpenAI key.
 **Repo:** `C:\LocalWork\WHACK 2026\WHACK`
 **Remote:** `https://github.com/qDawn/WHACK.git`
 **Demo machine:** Windows 11. The user is `nggro`.
@@ -27,7 +28,7 @@ The window starts hidden. **Ctrl+Alt+Space** shows and hides it. It is borderles
 Automated check, from the `WHACK` directory:
 
 ```text
-python -m unittest context.tests.test_model context.tests.test_rules context.tests.test_actions context.tests.test_manager context.tests.test_scratchpad
+python -m unittest context.tests.test_model context.tests.test_rules context.tests.test_actions context.tests.test_manager context.tests.test_scratchpad memory.tests.test_focus_store
 ```
 
 The last line should be `OK`. `python -m context.tests.test` is the teammate's live collector loop. It needs `psutil`, prints events, and is not the dashboard test.
@@ -65,7 +66,7 @@ The HUD fields that matter are `payload.actions` (`kind`, `title`, `detail`), `p
 
 Tauri 2, React, TypeScript. Identifier `com.whack.aura`.
 
-`hud/src/App.tsx` shows the catalog cards. The card whose `kind` matches `suggestion.kind` is marked Suggested and shows `suggestion.reason`. Open calls `open_action` only. Apps are not opened from React.
+`hud/src/App.tsx` shows three cards. The best match is marked Suggested. The other two are the next apps from recent history. Quick note stays along the bottom. Open calls `open_action` only. Apps are not opened from React. A matching rule cancels the model, so the model makes no API call while a rule matches.
 
 Quick note reads and writes `scratchpadPath` through the Tauri commands `read_scratchpad` and `write_scratchpad`. Saving the note lets the scratchpad collector see the edit. The note editor does not choose a card.
 
@@ -89,7 +90,7 @@ Current rules in `rules/default.json`:
 - clipboard contains the git repo path -> `open_terminal`
 - note contains `discord` -> `focus_discord`
 
-A note that contains both `platformer` and `discord` suggests Godot, because that rule is first. A URL beats every rule.
+A note that contains both `platformer` and `discord` suggests Godot, because that rule is first. A URL beats every rule. Later rules in the same file suggest a card when the note names that app, and a `.gd` or `project.godot` window title suggests Godot. The first three rules stay ahead of those.
 
 ### Catalog, `catalog.json` and `bridge/launch.py`
 
@@ -101,15 +102,19 @@ The catalog is the allowlist. Rules and the model may only choose these ids, plu
 | `open_terminal` | command | `wt.exe -d ${gitRepo}`, then PowerShell if Windows Terminal is missing. |
 | `focus_discord` | link | `os.startfile("discord:")`. |
 
+The rest of `catalog.json` is the common Windows set: editors, browsers, Explorer, Notepad, Office, chat, music, and the built-in Windows apps. Each one is a `link` or a `command`. `aura.config.json` sets `historyPath` to the simulated history file. Remove that key to record into `%LOCALAPPDATA%\aura\history.sqlite` again. Rebuild the simulation with `python -m memory.simulate`.
+
 `Open failed: C:\Users\nggro\games\platformer\project.godot` means that placeholder file is not on disk. Put a real `project.godot` path in `aura.config.json`. Lines after `Opened focus_discord` about a GPU cache or a second instance are printed by Discord, not by Aura.
 
 ### Model, `bridge/model.py`
 
-Optional. If `model.baseUrl` or `model.name` is empty, the watcher prints `Model is off. Rules only.` and never calls the network. The current config is empty, so the demo is offline.
+Optional. If `model.baseUrl` or `model.name` is empty, the watcher prints `Model is off. Rules only.` and never calls the network.
 
-When both are set, a total rule miss waits about 0.6 seconds and POSTs to `{baseUrl}/chat/completions` with temperature 0 and the configured timeout. The reply is accepted only when it names exactly one catalog id. The same context is not sent twice. A later rule match cancels an in-flight reply. The chosen card says `No rule matched. The model chose this.`
+When both are set, a total rule miss waits about 0.6 seconds and POSTs to `{baseUrl}/chat/completions` with temperature 0 and the configured timeout. The reply is accepted only when it names exactly one catalog id. The same context is not sent twice. A later rule match cancels an in-flight reply. The chosen card says `No rule matched. The model chose this from recent app history.`
 
-OpenAI setup is `baseUrl` `https://api.openai.com/v1`, `name` such as `gpt-4o-mini`, and `apiKey` set to a key from https://platform.openai.com/api-keys. A ChatGPT subscription is not an API key. Do not commit a filled-in key. Do not print the note, the clipboard, or the key.
+The system message is the text of `model_instructions.md`. The user message adds the current snapshot and `get_process_history()`: the open visit, the last 12 finished visits, and the top 5 apps from the last 24 hours. The database file itself is not sent.
+
+`aura.config.json` now has `baseUrl` `https://api.openai.com/v1` and `name` `gpt-4o-mini`. `apiKey` in that file stays empty. The key is read from `AURA_OPENAI_API_KEY`, then from a non-empty `model.apiKey`, then from gitignored `aura.secrets.json`. OpenAI is left off until one of those has a key, and the watcher says to add it. A ChatGPT subscription is not an API key. Do not commit a filled-in key. Do not print the note, the clipboard, or the key. See `history_handoff.md`.
 
 ### Context collectors
 
@@ -138,17 +143,17 @@ The active-window snapshot uses `process_name` and `window_title`. A missing pro
 - `gitRepo`: `C:\Users\nggro\code\platformer`
 - `hotkey`: `ctrl+alt+space`
 - `clipboardEnabled`: true
-- `model`: empty `baseUrl`, `apiKey`, and `name`; `timeoutMs` 8000
+- `model`: `baseUrl` `https://api.openai.com/v1`, empty `apiKey`, `name` `gpt-4o-mini`, `timeoutMs` 8000. The key belongs in `aura.secrets.json` or `AURA_OPENAI_API_KEY`.
 
 `requirements.txt` lists `pyperclip` only.
 
 ## What is not built
 
-Do not start these unless the user asks. The teammate is currently building the database.
+Do not start these unless the user asks.
 
-1. **SQLite history.** Specified in `Context_collector_handoff.md` section 11, and not present. There is no `memory/` package. The plan is a local SQLite file, `memory/database.py` and `memory/event_store.py`, and one `events` table: `id`, `event_type`, `source`, `timestamp`, and `data` as JSON. The app must keep this history itself. The model's conversation memory is not the history.
-2. **Privacy for that database.** A clipboard event may record that the clipboard changed. It must not store the copied text. A scratchpad event must not store the note body. Window title and process name may be stored. Do not log clipboard text or the note. Do not send the whole database to the model.
-3. **An agent that reads history.** `bridge/model.py` only sees the current snapshot, and only after every rule misses. It does not read past events. The teammate's planned `agent/` package and AgentBridge do not exist.
+1. **SQLite history.** Built. See `history_handoff.md` at 2026-11-07T20:39:25Z. `memory/database.py` and `memory/focus_store.py` store foreground focus sessions in `%LOCALAPPDATA%\aura\history.sqlite`. This is not the generic `events` table from `Context_collector_handoff.md`. The model's conversation memory is not the history.
+2. **Privacy for that database.** In place for process history. Clipboard text and the note body are not stored. Window title and process file name are stored. Do not send the whole database to the model. `get_process_history()` is the payload that goes out on a rule miss.
+3. **An agent package.** The teammate's planned `agent/` package and AgentBridge do not exist. The watcher asks `bridge/model.py` on a rule miss, and that call includes the compact focus history. It does not rank every card.
 4. **History-based card order.** Cards come from the catalog, plus a temporary URL card. Nothing ranks them from past activity.
 5. **One-command startup.** The user still starts Python and Tauri separately.
 6. **Process list and screenshots.** The process collector is unwired. The screen collector is a stub. The HUD snapshot does not include either.

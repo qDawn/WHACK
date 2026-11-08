@@ -1,8 +1,23 @@
+import json
+import os
+import tempfile
 import threading
 import time
 import unittest
+from pathlib import Path
+from unittest.mock import patch
 
-from bridge.model import ModelAdvisor, chat_url, model_settings, parse_choice, prompt_for, suggest
+from bridge.model import (
+    INSTRUCTIONS_PATH,
+    ModelAdvisor,
+    chat_url,
+    load_instructions,
+    missing_openai_key,
+    model_settings,
+    parse_choice,
+    prompt_for,
+    suggest,
+)
 from context.core.models import ContextSnapshot
 
 
@@ -29,6 +44,31 @@ def snapshot(note: str) -> ContextSnapshot:
 
 
 class ModelTests(unittest.TestCase):
+    def test_openai_key_comes_from_the_environment_or_a_secrets_file(self) -> None:
+        openai = {
+            "model": {
+                "baseUrl": "https://api.openai.com/v1",
+                "name": "gpt-4o-mini",
+                "apiKey": "",
+            }
+        }
+        missing = Path("does-not-exist-aura-secrets.json")
+        with patch.dict(os.environ, {"AURA_OPENAI_API_KEY": ""}):
+            self.assertIsNone(model_settings(openai, missing))
+            self.assertTrue(missing_openai_key(openai, missing))
+            self.assertEqual(model_settings(CONFIG, missing)["api_key"], "secret-key")
+
+        with tempfile.TemporaryDirectory() as folder:
+            secrets = Path(folder) / "aura.secrets.json"
+            secrets.write_text(json.dumps({"apiKey": "sk-file"}), encoding="utf-8")
+            with patch.dict(os.environ, {"AURA_OPENAI_API_KEY": ""}):
+                settings = model_settings(openai, secrets)
+            assert settings is not None
+            self.assertEqual(settings["api_key"], "sk-file")
+            self.assertFalse(missing_openai_key(openai, secrets))
+            with patch.dict(os.environ, {"AURA_OPENAI_API_KEY": "sk-env"}):
+                self.assertEqual(model_settings(openai, secrets)["api_key"], "sk-env")
+
     def test_empty_model_config_stays_offline(self) -> None:
         self.assertIsNone(model_settings({"model": {"baseUrl": "", "name": ""}}))
         called = False
@@ -60,6 +100,54 @@ class ModelTests(unittest.TestCase):
         text = prompt_for(hidden, ENTRIES)
         self.assertNotIn("secret token", text)
         self.assertIn("clipboard: disabled", text)
+
+    def test_suggest_sends_the_instructions_and_the_focus_history(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            instructions = Path(folder) / "model_instructions.md"
+            instructions.write_text("Reply with one id from the apps list, or none.", encoding="utf-8")
+            seen: dict[str, str] = {}
+
+            def post(settings, payload):
+                seen["system"] = payload["messages"][0]["content"]
+                seen["user"] = payload["messages"][1]["content"]
+                return "open_godot"
+
+            history = {
+                "recent": [
+                    {
+                        "process_name": "Code.exe",
+                        "window_title": "main.py",
+                        "started_at": "2026-11-07T18:00:00Z",
+                        "duration_ms": 5000,
+                    }
+                ],
+                "frequent": [
+                    {
+                        "process_name": "Code.exe",
+                        "focus_count": 2,
+                        "total_ms": 9000,
+                        "last_seen": "2026-11-07T18:00:00Z",
+                    }
+                ],
+            }
+            suggestion = suggest(
+                snapshot("unrelated note"),
+                ENTRIES,
+                CONFIG,
+                post,
+                history=history,
+                instructions_path=instructions,
+            )
+
+        assert suggestion is not None
+        self.assertEqual(suggestion["kind"], "open_godot")
+        self.assertIn("recent app history", suggestion["reason"])
+        self.assertEqual(seen["system"], "Reply with one id from the apps list, or none.")
+        self.assertIn("Code.exe | main.py | 5s", seen["user"])
+        self.assertIn("Code.exe | visits 2 | 9s", seen["user"])
+        self.assertNotIn("secret-key", seen["user"])
+        self.assertIn("Reply with one id", load_instructions())
+        self.assertTrue(INSTRUCTIONS_PATH.is_file())
 
     def test_suggest_accepts_only_a_catalog_id(self) -> None:
         def post(settings, payload):

@@ -21,6 +21,237 @@
       "detail": "Discord",
       "method": "link",
       "target": "discord:"
+    },
+    {
+      "id": "open_vscode",
+      "title": "Visual Studio Code",
+      "detail": "Visual Studio Code",
+      "method": "link",
+      "target": "vscode:"
+    },
+    {
+      "id": "open_cursor",
+      "title": "Cursor",
+      "detail": "Cursor",
+      "method": "link",
+      "target": "cursor:"
+    },
+    {
+      "id": "open_chrome",
+      "title": "Chrome",
+      "detail": "Google Chrome",
+      "method": "command",
+      "command": ["cmd.exe", "/c", "start", "", "chrome"]
+    },
+    {
+      "id": "open_edge",
+      "title": "Edge",
+      "detail": "Microsoft Edge",
+      "method": "link",
+      "target": "microsoft-edge:"
+    },
+    {
+      "id": "open_firefox",
+      "title": "Firefox",
+      "detail": "Firefox",
+      "method": "command",
+      "command": ["cmd.exe", "/c", "start", "", "firefox"]
+    },
+    {
+      "id": "open_explorer",
+      "title": "File Explorer",
+      "detail": "${gitRepo}",
+      "method": "command",
+      "command": ["explorer.exe", "${gitRepo}"]
+    },
+    {
+      "id": "open_notepad",
+      "title": "Notepad",
+      "detail": "Notepad",
+      "method": "command",
+      "command": ["notepad.exe"]
+    },
+    {
+      "id": "open_calculator",
+      "title": "Calculator",
+      "detail": "Calculator",
+      "method": "command",
+      "command": ["calc.exe"]
+    },
+    {
+      "id": "open_paint",
+      "title": "Paint",
+      "detail": "Paint",
+      "method": "command",
+      "command": ["mspaint.exe"]
+    },
+    {
+      "id": "open_snipping",
+      "title": "Snipping Tool",
+      "detail": "Screenshot",
+      "method": "link",
+      "target": "ms-screenclip:"
+    },
+    {
+      "id": "open_photos",
+      "title": "Photos",
+      "detail": "Photos",
+      "method": "link",
+      "target": "ms-photos:"
+    },
+    {
+      "id": "open_settings",
+      "title": "Settings",
+      "detail": "Windows Settings",
+      "method": "link",
+      "target": "ms-settings:"
+    },
+    {
+      "id": "open_task_manager",
+      "title": "Task Manager",
+      "detail": "Task Manager",
+      "method": "command",
+      "command": ["taskmgr.exe"]
+    },
+    {
+      "id": "open_store",
+      "title": "Microsoft Store",
+      "detail": "Microsoft Store",
+      "method": "link",
+      "target": "ms-windows-store:"
+    },
+    {
+      "id": "open_clock",
+      "title": "Clock",
+      "detail": "Clock",
+      "method": "link",
+      "target": "ms-clock:"
+    },
+    {
+      "id": "open_camera",
+      "title": "Camera",
+      "detail": "Camera",
+      "method": "link",
+      "target": "microsoft.windows.camera:"
+    },
+    {
+      "id": "open_maps",
+      "title": "Maps",
+      "detail": "Maps",
+      "method": "link",
+      "target": "bingmaps:"
+    },
+    {
+      "id": "open_mail",
+      "title": "Mail",
+      "detail": "Mail",
+      "method": "link",
+      "target": "outlookmail:"
+    },
+    {
+      "id": "open_calendar",
+      "title": "Calendar",
+      "detail": "Calendar",
+      "method": "link",
+      "target": "outlookcal:"
+    },
+    {
+      "id": "open_spotify",
+      "title": "Spotify",
+      "detail": "Spotify",
+      "method": "link",
+      "target": "spotify:"
+    },
+    {
+      "id": "open_steam",
+      "title": "Steam",
+      "detail": "Steam",
+      "method": "link",
+      "target": "steam:"
+    },
+    {
+      "id": "open_slack",
+      "title": "Slack",
+      "detail": "Slack",
+      "method": "link",
+      "target": "slack:"
+    },
+    {
+      "id": "open_teams",
+      "title": "Teams",
+      "detail": "Microsoft Teams",
+      "method": "link",
+      "target": "msteams:"
+    },
+    {
+      "id": "open_whatsapp",
+      "title": "WhatsApp",
+      "detail": "WhatsApp",
+      "method": "link",
+      "target": "whatsapp:"
+    },
+    {
+      "id": "open_telegram",
+      "title": "Telegram",
+      "detail": "Telegram",
+      "method": "link",
+      "target": "tg:"
+    },
+    {
+      "id": "open_word",
+      "title": "Word",
+      "detail": "Microsoft Word",
+      "method": "link",
+      "target": "ms-word:"
+    },
+    {
+      "id": "open_excel",
+      "title": "Excel",
+      "detail": "Microsoft Excel",
+      "method": "link",
+      "target": "ms-excel:"
+    },
+    {
+      "id": "open_powerpoint",
+      "title": "PowerPoint",
+      "detail": "PowerPoint",
+      "method": "link",
+      "target": "ms-powerpoint:"
+    },
+    {
+      "id": "open_onenote",
+      "title": "OneNote",
+      "detail": "OneNote",
+      "method": "link",
+      "target": "onenote:"
+    },
+    {
+      "id": "open_powershell",
+      "title": "PowerShell",
+      "detail": "PowerShell",
+      "method": "command",
+      "command": ["powershell.exe", "-NoExit"]
+    },
+    {
+      "id": "open_command",
+      "title": "Command Prompt",
+      "detail": "Command Prompt",
+      "method": "command",
+      "command": ["cmd.exe"]
+    },
+    {
+      "id": "open_notion",
+      "title": "Notion",
+      "detail": "Notion",
+      "method": "link",
+      "target": "notion:"
+    },
+    {
+      "id": "open_figma",
+      "title": "Figma",
+      "detail": "Figma",
+      "method": "link",
+      "target": "figma:"
     }
   ]
 }

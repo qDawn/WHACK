@@ -1,0 +1,7 @@
+# Local API key. This file stays off GitHub.
+aura.secrets.json
+
+# History databases, if one is created inside the repo.
+*.sqlite
+*.sqlite-wal
+*.sqlite-shm

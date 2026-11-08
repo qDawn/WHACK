@@ -1,7 +1,8 @@
 import unittest
 
 from context.core.models import ContextSnapshot
-from bridge.rules import first_match
+from bridge.launch import load_entries
+from bridge.rules import first_match, load_json, project_paths
 
 
 CONFIG = {
@@ -85,6 +86,30 @@ class RuleMatchTests(unittest.TestCase):
         assert suggestion is not None
         self.assertEqual(suggestion["kind"], "open_url")
         self.assertEqual(suggestion["target"], "https://example.com/docs")
+
+    def test_shipped_rules_name_catalog_cards(self) -> None:
+        config_path, rules_path = project_paths()
+        config = load_json(config_path)
+        rules = load_json(rules_path)
+        allowed = {entry["id"] for entry in load_entries()}
+        for rule in rules["rules"]:
+            self.assertIn(rule["suggest"]["kind"], allowed)
+
+        platformer = first_match(snapshot("finish the platformer and ping discord"), rules, config)
+        assert platformer is not None
+        self.assertEqual(platformer["kind"], "open_godot")
+
+        spotify = first_match(snapshot("put on spotify"), rules, config)
+        assert spotify is not None
+        self.assertEqual(spotify["kind"], "open_spotify")
+
+        script = snapshot("hello")
+        script.window_title = "player.gd - Visual Studio Code"
+        from_script = first_match(script, rules, config)
+        assert from_script is not None
+        self.assertEqual(from_script["kind"], "open_godot")
+
+        self.assertIsNone(first_match(snapshot("hello from the dashboard"), rules, config))
 
     def test_www_link_is_normalized_to_https(self) -> None:
         suggestion = first_match(snapshot("read www.example.com/guide next"), RULES, CONFIG)

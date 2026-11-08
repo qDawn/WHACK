@@ -8,9 +8,10 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 
-from bridge.watch import remember_window
+from bridge.watch import read_process_history, remember_window
 from context.core.events import ContextEvent
 from memory.focus_store import FocusStore, history_path
+from memory.simulate import seed_history
 
 START = datetime(2026, 11, 7, 18, 0, tzinfo=timezone.utc)
 
@@ -243,6 +244,16 @@ class RememberWindowTests(unittest.TestCase):
         )
         self.assertEqual(calls, [("", "a.py", "2026-11-07T18:00:00Z")])
 
+    def test_a_history_read_failure_stays_empty(self) -> None:
+        class Boom:
+            def get_process_history(self) -> dict:
+                raise sqlite3.OperationalError("database is locked")
+
+        self.assertEqual(read_process_history(None), {"recent": [], "frequent": []})
+        with redirect_stdout(io.StringIO()) as output:
+            self.assertEqual(read_process_history(Boom()), {"recent": [], "frequent": []})
+        self.assertIn("History read failed", output.getvalue())
+
     def test_a_database_error_does_not_escape(self) -> None:
         class Boom:
             def record_window(self, process_name: str, window_title: str, at: str) -> None:
@@ -258,6 +269,21 @@ class RememberWindowTests(unittest.TestCase):
                 ),
             )
         self.assertIn("History write failed", output.getvalue())
+
+
+class SimulatedHistoryTests(unittest.TestCase):
+    def test_the_simulated_day_points_at_godot_after_code(self) -> None:
+        with tempfile.TemporaryDirectory() as folder:
+            path = seed_history(Path(folder) / "simulated.sqlite", ended_at=START)
+            store = FocusStore(path)
+            try:
+                history = store.get_process_history(at=START.isoformat())
+            finally:
+                store.close()
+        self.assertEqual(history["recent"][0]["process_name"], "Code.exe")
+        self.assertEqual(history["recent"][0]["window_title"], "hud.gd - Visual Studio Code")
+        self.assertEqual(history["frequent"][0]["process_name"], "Godot.exe")
+        self.assertGreater(history["frequent"][0]["total_ms"], history["frequent"][1]["total_ms"])
 
 
 if __name__ == "__main__":

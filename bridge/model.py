@@ -6,16 +6,20 @@ is accepted only when it names one catalog id.
 
 from dataclasses import replace
 import json
+import os
+from pathlib import Path
 import re
 import threading
 import urllib.error
+import urllib.parse
 import urllib.request
 from typing import Any, Callable
 
-from bridge.rules import substitute
+from bridge.rules import ROOT, substitute
 from context.core.models import ContextSnapshot
 
-SYSTEM_PROMPT = (
+INSTRUCTIONS_PATH = ROOT / "model_instructions.md"
+_FALLBACK_INSTRUCTIONS = (
     "You choose the one next app for this person. "
     "Reply with one app id from the list, or none. No other words."
 )
@@ -28,11 +32,51 @@ class ModelError(Exception):
     """The model endpoint did not return a usable reply."""
 
 
-def model_settings(config: dict[str, Any]) -> dict[str, Any] | None:
+def resolve_api_key(config: dict[str, Any], secrets_path: Path | None = None) -> str:
+    """Key from the environment, then config, then the gitignored secrets file."""
+
+    from_env = os.environ.get("AURA_OPENAI_API_KEY", "").strip()
+    if from_env:
+        return from_env
+    configured = str((config.get("model") or {}).get("apiKey") or "").strip()
+    if configured:
+        return configured
+    path = ROOT / "aura.secrets.json" if secrets_path is None else secrets_path
+    if not path.is_file():
+        return ""
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, UnicodeError):
+        return ""
+    if not isinstance(data, dict):
+        return ""
+    return str(data.get("apiKey") or "").strip()
+
+
+def _is_openai(base_url: str) -> bool:
+    return (urllib.parse.urlparse(base_url).hostname or "").casefold() == "api.openai.com"
+
+
+def missing_openai_key(config: dict[str, Any], secrets_path: Path | None = None) -> bool:
+    model = config.get("model") or {}
+    base_url = str(model.get("baseUrl") or "").strip()
+    name = str(model.get("name") or "").strip()
+    if not base_url or not name or not _is_openai(base_url):
+        return False
+    return resolve_api_key(config, secrets_path) == ""
+
+
+def model_settings(
+    config: dict[str, Any],
+    secrets_path: Path | None = None,
+) -> dict[str, Any] | None:
     model = config.get("model") or {}
     base_url = str(model.get("baseUrl") or "").strip()
     name = str(model.get("name") or "").strip()
     if not base_url or not name:
+        return None
+    api_key = resolve_api_key(config, secrets_path)
+    if _is_openai(base_url) and not api_key:
         return None
     timeout_ms = model.get("timeoutMs") or 8000
     try:
@@ -41,7 +85,7 @@ def model_settings(config: dict[str, Any]) -> dict[str, Any] | None:
         timeout_s = 8
     return {
         "url": chat_url(base_url),
-        "api_key": str(model.get("apiKey") or ""),
+        "api_key": api_key,
         "name": name,
         "timeout": timeout_s,
     }
@@ -64,7 +108,58 @@ def fingerprint(snapshot: ContextSnapshot) -> tuple[str, str, str, bool, str]:
     )
 
 
-def prompt_for(snapshot: ContextSnapshot, entries: list[dict[str, Any]]) -> str:
+def load_instructions(path: Path | None = None) -> str:
+    """The markdown brief sent as the model's system message."""
+
+    file = INSTRUCTIONS_PATH if path is None else path
+    try:
+        text = file.read_text(encoding="utf-8").strip()
+    except OSError:
+        return _FALLBACK_INSTRUCTIONS
+    return text or _FALLBACK_INSTRUCTIONS
+
+
+def _visit_length(duration_ms: int | None) -> str:
+    if duration_ms is None:
+        return "still in front"
+    return f"{max(int(duration_ms) // 1000, 0)}s"
+
+
+def format_history(history: dict[str, Any] | None) -> str:
+    """Compact focus history. This is the only database content the model sees."""
+
+    recent = list((history or {}).get("recent") or [])
+    frequent = list((history or {}).get("frequent") or [])
+    lines = ["recent focus:"]
+    if not recent:
+        lines.append("- none")
+    for item in recent:
+        lines.append(
+            "- {process} | {title} | {length}".format(
+                process=item.get("process_name") or "",
+                title=item.get("window_title") or "",
+                length=_visit_length(item.get("duration_ms")),
+            )
+        )
+    lines.append("frequent apps:")
+    if not frequent:
+        lines.append("- none")
+    for item in frequent:
+        lines.append(
+            "- {process} | visits {count} | {length}".format(
+                process=item.get("process_name") or "",
+                count=item.get("focus_count") or 0,
+                length=_visit_length(item.get("total_ms")),
+            )
+        )
+    return "\n".join(lines)
+
+
+def prompt_for(
+    snapshot: ContextSnapshot,
+    entries: list[dict[str, Any]],
+    history: dict[str, Any] | None = None,
+) -> str:
     lines = [
         f"process: {snapshot.process_name}",
         f"window: {snapshot.window_title}",
@@ -74,6 +169,7 @@ def prompt_for(snapshot: ContextSnapshot, entries: list[dict[str, Any]]) -> str:
         lines.append(f"clipboard: {snapshot.clipboard_text or ''}")
     else:
         lines.append("clipboard: disabled")
+    lines.append(format_history(history))
     lines.append("apps:")
     for entry in entries:
         lines.append(f"- {entry['id']}: {entry.get('title', entry['id'])}")
@@ -116,6 +212,8 @@ def suggest(
     entries: list[dict[str, Any]],
     config: dict[str, Any],
     post: Callable[[dict[str, Any], dict[str, Any]], str] | None = None,
+    history: dict[str, Any] | None = None,
+    instructions_path: Path | None = None,
 ) -> dict[str, str] | None:
     settings = model_settings(config)
     if settings is None:
@@ -124,8 +222,8 @@ def suggest(
         "model": settings["name"],
         "temperature": 0,
         "messages": [
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": prompt_for(snapshot, entries)},
+            {"role": "system", "content": load_instructions(instructions_path)},
+            {"role": "user", "content": prompt_for(snapshot, entries, history)},
         ],
     }
     text = (post or post_chat)(settings, payload)
@@ -137,7 +235,7 @@ def suggest(
         "kind": kind,
         "title": str(entry.get("title", kind)),
         "detail": substitute(str(entry.get("detail", "")), config),
-        "reason": "No rule matched. The model chose this.",
+        "reason": "No rule matched. The model chose this from recent app history.",
         "source": "model",
     }
 

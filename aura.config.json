@@ -4,10 +4,11 @@
   "gitRepo": "C:\\Users\\nggro\\code\\platformer",
   "hotkey": "ctrl+alt+space",
   "clipboardEnabled": true,
+  "historyPath": "C:\\Users\\nggro\\AppData\\Local\\aura\\simulated_history.sqlite",
   "model": {
-    "baseUrl": "",
+    "baseUrl": "https://api.openai.com/v1",
     "apiKey": "",
-    "name": "",
+    "name": "gpt-4o-mini",
     "timeoutMs": 8000
   }
 }

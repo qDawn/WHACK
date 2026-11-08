@@ -5,8 +5,9 @@ import threading
 from pathlib import Path
 
 from bridge.launch import cards, load_entries, parse_action, perform
-from bridge.model import ModelAdvisor, model_settings
+from bridge.model import ModelAdvisor, missing_openai_key, model_settings, suggest
 from bridge.pipe_server import serve, serve_actions
+from bridge.rank import top_cards
 from bridge.rules import first_match, load_json, project_paths
 from bridge.state_snapshot import to_state_snapshot
 from context.collectors.active_window import ActiveWindowCollector
@@ -51,6 +52,18 @@ def open_history(config: dict) -> FocusStore | None:
         return None
 
 
+def read_process_history(store: FocusStore | None) -> dict[str, list]:
+    """The compact history the model may see. A read error leaves the history empty."""
+
+    if store is None:
+        return {"recent": [], "frequent": []}
+    try:
+        return store.get_process_history()
+    except Exception:
+        print("History read failed", flush=True)
+        return {"recent": [], "frequent": []}
+
+
 def remember_window(store: FocusStore | None, event: ContextEvent) -> None:
     """Record a foreground app. A database error must not stop collection."""
 
@@ -80,36 +93,77 @@ def main() -> None:
     matched_url = {"value": ""}
 
     def on_action(line: str) -> None:
+        requested_kind: str | None = None
+        resolved_kind: str | None = None
         try:
-            requested = json.loads(line).get("kind")
+            parsed = json.loads(line)
+            requested = parsed.get("kind") if isinstance(parsed, dict) else None
+            if isinstance(requested, str):
+                requested_kind = requested
             if requested == "open_url":
                 with url_lock:
                     url = matched_url["value"]
+                resolved_kind = "open_url"
                 perform("open_url", config, entries, target=url)
-                kind = "open_url"
             else:
-                kind = parse_action(line, entries)
-                perform(kind, config, entries)
+                resolved_kind = parse_action(line, entries)
+                perform(resolved_kind, config, entries)
         except Exception as exc:
             print(f"Open failed: {exc}", flush=True)
-            outbox.push(json.dumps({"protocol": "aura", "type": "hud.error", "message": str(exc)}))
+            error_line: dict[str, str] = {
+                "protocol": "aura",
+                "type": "hud.error",
+                "message": str(exc),
+            }
+            error_kind = resolved_kind if isinstance(resolved_kind, str) else requested_kind
+            if isinstance(error_kind, str):
+                error_line["kind"] = error_kind
+            outbox.push(json.dumps(error_line))
             return
-        print(f"Opened {kind}", flush=True)
+        print(f"Opened {resolved_kind}", flush=True)
         outbox.push(json.dumps({"protocol": "aura", "type": "hud.hide"}))
 
     def on_model(snapshot: ContextSnapshot, suggestion: dict[str, str] | None) -> None:
         if suggestion is None:
             print("Model chose none", flush=True)
             return
-        message = to_state_snapshot(snapshot, suggestion, actions=actions)
+        message = to_state_snapshot(
+            snapshot,
+            suggestion,
+            actions=top_cards(
+                actions,
+                suggestion,
+                read_process_history(history_holder["store"]),
+                limit=8,
+            ),
+        )
         outbox.set_snapshot(json.dumps(message, ensure_ascii=False))
         print(f"Suggested {suggestion['kind']} from model", flush=True)
 
+    history_holder: dict[str, FocusStore | None] = {"store": None}
+
+    def suggest_from_history(
+        snapshot: ContextSnapshot,
+        catalog: list[dict],
+        current_config: dict,
+    ) -> dict[str, str] | None:
+        return suggest(
+            snapshot,
+            catalog,
+            current_config,
+            history=read_process_history(history_holder["store"]),
+        )
+
     advisor = None
     if model_settings(config) is not None:
-        advisor = ModelAdvisor(config, entries, on_model)
+        advisor = ModelAdvisor(config, entries, on_model, suggest_from_history)
         advisor.start()
         print("Model is on. It runs only when no rule matches.", flush=True)
+    elif missing_openai_key(config):
+        print(
+            "Model is off. Add the key to aura.secrets.json or AURA_OPENAI_API_KEY.",
+            flush=True,
+        )
     else:
         print("Model is off. Rules only.", flush=True)
 
@@ -122,10 +176,11 @@ def main() -> None:
         outbox.set_snapshot(json.dumps(message, ensure_ascii=False))
 
     def on_event(event: ContextEvent, snapshot: ContextSnapshot) -> None:
-        remember_window(history, event)
+        remember_window(history_holder["store"], event)
         if event.event_type not in HUD_EVENT_TYPES:
             return
         suggestion = first_match(snapshot, rules, config)
+        history = read_process_history(history_holder["store"])
         shown = actions
         url = ""
         if suggestion is not None and suggestion.get("kind") == "open_url":
@@ -143,15 +198,24 @@ def main() -> None:
         if suggestion is not None:
             if advisor is not None:
                 advisor.cancel()
-            publish_match(snapshot, suggestion, shown)
+            publish_match(snapshot, suggestion, top_cards(shown, suggestion, history, limit=8))
             print(f"Suggested {suggestion['kind']}", flush=True)
             return
-        publish_match(snapshot, None, actions)
-        print("No card suggested", flush=True)
+        ranked = top_cards(actions, None, history, limit=8)
+        if ranked:
+            suggestion = {
+                "kind": ranked[0]["kind"],
+                "title": ranked[0]["title"],
+                "detail": ranked[0]["detail"],
+                "reason": "From your recent apps.",
+                "source": "history",
+            }
+        publish_match(snapshot, suggestion, ranked)
+        print("No rule matched", flush=True)
         if advisor is not None:
             advisor.consider(snapshot)
 
-    history = open_history(config)
+    history_holder["store"] = open_history(config)
     manager.subscribe(on_event)
     if clipboard_enabled:
         manager.register_collector(ClipboardCollector())
@@ -179,12 +243,13 @@ def main() -> None:
             advisor.stop()
         collector.stop()
         manager.stop()
-        if history is not None:
+        store = history_holder["store"]
+        if store is not None:
             try:
-                history.close_current()
+                store.close_current()
             except Exception:
                 print("History write failed", flush=True)
-            history.close()
+            store.close()
 
 
 if __name__ == "__main__":

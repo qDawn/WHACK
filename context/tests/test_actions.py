@@ -48,7 +48,12 @@ class ActionTests(unittest.TestCase):
 
     def test_project_catalog_loads(self) -> None:
         loaded = load_entries()
-        self.assertEqual([entry["id"] for entry in loaded], ["open_godot", "open_terminal", "focus_discord"])
+        ids = [entry["id"] for entry in loaded]
+        self.assertGreaterEqual(len(ids), 24)
+        self.assertEqual(len(ids), len(set(ids)))
+        for entry in loaded:
+            self.assertIn(entry["method"], ("file", "command", "link"))
+        self.assertEqual(ids[:3], ["open_godot", "open_terminal", "focus_discord"])
 
     def test_file_entry_refuses_a_missing_path(self) -> None:
         with self.assertRaises(FileNotFoundError):

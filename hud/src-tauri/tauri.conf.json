@@ -21,7 +21,13 @@
         "alwaysOnTop": true,
         "skipTaskbar": true,
         "resizable": false,
-        "shadow": true,
+        "transparent": true,
+        "shadow": false,
+        "noRedirectionBitmap": true,
+        "backgroundColor": "#00000000",
+        "windowEffects": {
+          "effects": ["acrylic"]
+        },
         "focus": false
       }
     ],

@@ -3,29 +3,207 @@
     {
       "id": "godot-from-note",
       "when": { "noteContains": "platformer" },
-      "suggest": {
-        "kind": "open_godot",
-        "title": "Open the Godot project",
-        "target": "${godotProject}"
-      }
+      "suggest": { "kind": "open_godot", "title": "Open the Godot project", "target": "${godotProject}" }
     },
     {
       "id": "terminal-from-clipboard",
       "when": { "clipboardContains": "${gitRepo}" },
-      "suggest": {
-        "kind": "open_terminal",
-        "title": "Open a terminal in the repo",
-        "target": "${gitRepo}"
-      }
+      "suggest": { "kind": "open_terminal", "title": "Open a terminal in the repo", "target": "${gitRepo}" }
     },
     {
       "id": "discord-from-note",
       "when": { "noteContains": "discord" },
-      "suggest": {
-        "kind": "focus_discord",
-        "title": "Focus Discord",
-        "target": "Discord"
-      }
+      "suggest": { "kind": "focus_discord", "title": "Focus Discord", "target": "Discord" }
+    },
+    {
+      "id": "godot-from-script",
+      "when": { "titleContains": ".gd" },
+      "suggest": { "kind": "open_godot", "title": "Open the Godot project", "target": "${godotProject}" }
+    },
+    {
+      "id": "godot-from-project-file",
+      "when": { "titleContains": "project.godot" },
+      "suggest": { "kind": "open_godot", "title": "Open the Godot project", "target": "${godotProject}" }
+    },
+    {
+      "id": "godot-from-name",
+      "when": { "noteContains": "godot" },
+      "suggest": { "kind": "open_godot", "title": "Open Godot", "target": "${godotProject}" }
+    },
+    {
+      "id": "terminal-from-note",
+      "when": { "noteContains": "terminal" },
+      "suggest": { "kind": "open_terminal", "title": "Open a terminal in the repo", "target": "${gitRepo}" }
+    },
+    {
+      "id": "vscode-from-note",
+      "when": { "noteContains": "visual studio code" },
+      "suggest": { "kind": "open_vscode", "title": "Open Visual Studio Code", "target": "Visual Studio Code" }
+    },
+    {
+      "id": "vscode-from-short-name",
+      "when": { "noteContains": "vscode" },
+      "suggest": { "kind": "open_vscode", "title": "Open Visual Studio Code", "target": "Visual Studio Code" }
+    },
+    {
+      "id": "cursor-from-note",
+      "when": { "noteContains": "cursor" },
+      "suggest": { "kind": "open_cursor", "title": "Open Cursor", "target": "Cursor" }
+    },
+    {
+      "id": "chrome-from-note",
+      "when": { "noteContains": "chrome" },
+      "suggest": { "kind": "open_chrome", "title": "Open Chrome", "target": "Google Chrome" }
+    },
+    {
+      "id": "edge-from-note",
+      "when": { "noteContains": "microsoft edge" },
+      "suggest": { "kind": "open_edge", "title": "Open Edge", "target": "Microsoft Edge" }
+    },
+    {
+      "id": "firefox-from-note",
+      "when": { "noteContains": "firefox" },
+      "suggest": { "kind": "open_firefox", "title": "Open Firefox", "target": "Firefox" }
+    },
+    {
+      "id": "explorer-from-note",
+      "when": { "noteContains": "file explorer" },
+      "suggest": { "kind": "open_explorer", "title": "Open File Explorer", "target": "${gitRepo}" }
+    },
+    {
+      "id": "notepad-from-note",
+      "when": { "noteContains": "notepad" },
+      "suggest": { "kind": "open_notepad", "title": "Open Notepad", "target": "Notepad" }
+    },
+    {
+      "id": "calculator-from-note",
+      "when": { "noteContains": "calculator" },
+      "suggest": { "kind": "open_calculator", "title": "Open Calculator", "target": "Calculator" }
+    },
+    {
+      "id": "paint-from-note",
+      "when": { "noteContains": "paint" },
+      "suggest": { "kind": "open_paint", "title": "Open Paint", "target": "Paint" }
+    },
+    {
+      "id": "snipping-from-note",
+      "when": { "noteContains": "screenshot" },
+      "suggest": { "kind": "open_snipping", "title": "Take a screenshot", "target": "Screenshot" }
+    },
+    {
+      "id": "photos-from-note",
+      "when": { "noteContains": "photos" },
+      "suggest": { "kind": "open_photos", "title": "Open Photos", "target": "Photos" }
+    },
+    {
+      "id": "settings-from-note",
+      "when": { "noteContains": "windows settings" },
+      "suggest": { "kind": "open_settings", "title": "Open Settings", "target": "Windows Settings" }
+    },
+    {
+      "id": "task-manager-from-note",
+      "when": { "noteContains": "task manager" },
+      "suggest": { "kind": "open_task_manager", "title": "Open Task Manager", "target": "Task Manager" }
+    },
+    {
+      "id": "store-from-note",
+      "when": { "noteContains": "microsoft store" },
+      "suggest": { "kind": "open_store", "title": "Open the Microsoft Store", "target": "Microsoft Store" }
+    },
+    {
+      "id": "clock-from-note",
+      "when": { "noteContains": "clock" },
+      "suggest": { "kind": "open_clock", "title": "Open Clock", "target": "Clock" }
+    },
+    {
+      "id": "camera-from-note",
+      "when": { "noteContains": "camera" },
+      "suggest": { "kind": "open_camera", "title": "Open Camera", "target": "Camera" }
+    },
+    {
+      "id": "maps-from-note",
+      "when": { "noteContains": "maps" },
+      "suggest": { "kind": "open_maps", "title": "Open Maps", "target": "Maps" }
+    },
+    {
+      "id": "mail-from-note",
+      "when": { "noteContains": "email" },
+      "suggest": { "kind": "open_mail", "title": "Open Mail", "target": "Mail" }
+    },
+    {
+      "id": "calendar-from-note",
+      "when": { "noteContains": "calendar" },
+      "suggest": { "kind": "open_calendar", "title": "Open Calendar", "target": "Calendar" }
+    },
+    {
+      "id": "spotify-from-note",
+      "when": { "noteContains": "spotify" },
+      "suggest": { "kind": "open_spotify", "title": "Open Spotify", "target": "Spotify" }
+    },
+    {
+      "id": "steam-from-note",
+      "when": { "noteContains": "steam" },
+      "suggest": { "kind": "open_steam", "title": "Open Steam", "target": "Steam" }
+    },
+    {
+      "id": "slack-from-note",
+      "when": { "noteContains": "slack" },
+      "suggest": { "kind": "open_slack", "title": "Open Slack", "target": "Slack" }
+    },
+    {
+      "id": "teams-from-note",
+      "when": { "noteContains": "teams" },
+      "suggest": { "kind": "open_teams", "title": "Open Teams", "target": "Microsoft Teams" }
+    },
+    {
+      "id": "whatsapp-from-note",
+      "when": { "noteContains": "whatsapp" },
+      "suggest": { "kind": "open_whatsapp", "title": "Open WhatsApp", "target": "WhatsApp" }
+    },
+    {
+      "id": "telegram-from-note",
+      "when": { "noteContains": "telegram" },
+      "suggest": { "kind": "open_telegram", "title": "Open Telegram", "target": "Telegram" }
+    },
+    {
+      "id": "word-from-note",
+      "when": { "noteContains": "microsoft word" },
+      "suggest": { "kind": "open_word", "title": "Open Word", "target": "Microsoft Word" }
+    },
+    {
+      "id": "excel-from-note",
+      "when": { "noteContains": "excel" },
+      "suggest": { "kind": "open_excel", "title": "Open Excel", "target": "Microsoft Excel" }
+    },
+    {
+      "id": "powerpoint-from-note",
+      "when": { "noteContains": "powerpoint" },
+      "suggest": { "kind": "open_powerpoint", "title": "Open PowerPoint", "target": "PowerPoint" }
+    },
+    {
+      "id": "onenote-from-note",
+      "when": { "noteContains": "onenote" },
+      "suggest": { "kind": "open_onenote", "title": "Open OneNote", "target": "OneNote" }
+    },
+    {
+      "id": "powershell-from-note",
+      "when": { "noteContains": "powershell" },
+      "suggest": { "kind": "open_powershell", "title": "Open PowerShell", "target": "PowerShell" }
+    },
+    {
+      "id": "command-from-note",
+      "when": { "noteContains": "command prompt" },
+      "suggest": { "kind": "open_command", "title": "Open Command Prompt", "target": "Command Prompt" }
+    },
+    {
+      "id": "notion-from-note",
+      "when": { "noteContains": "notion" },
+      "suggest": { "kind": "open_notion", "title": "Open Notion", "target": "Notion" }
+    },
+    {
+      "id": "figma-from-note",
+      "when": { "noteContains": "figma" },
+      "suggest": { "kind": "open_figma", "title": "Open Figma", "target": "Figma" }
     }
   ]
 }
