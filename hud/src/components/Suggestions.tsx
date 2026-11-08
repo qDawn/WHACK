@@ -19,6 +19,7 @@ type SuggestionsProps = {
   suggestedKind: string | null;
   reason: string | null;
   error: SuggestionError | null;
+  modelStatus?: string | null;
   onOpen: (kind: string) => void;
   onHoldChange?: (held: boolean) => void;
   keyboardActive?: boolean;
@@ -36,7 +37,7 @@ export const SUGGESTION_CARD_LIMIT = 3;
 const SUGGESTION_CARD_MAX = 8;
 
 const Suggestions = forwardRef<SuggestionsHandle, SuggestionsProps>(function Suggestions(
-  { actions, suggestedKind, reason, error, onOpen, onHoldChange, keyboardActive = false },
+  { actions, suggestedKind, reason, error, modelStatus = null, onOpen, onHoldChange, keyboardActive = false },
   ref,
 ) {
   const [expanded, setExpanded] = useState(false);
@@ -161,6 +162,11 @@ const Suggestions = forwardRef<SuggestionsHandle, SuggestionsProps>(function Sug
         reportHold(pointerInsideRef.current, false);
       }}
     >
+      {modelStatus ? (
+        <p className="suggestions__model" role="status">
+          {modelStatus}
+        </p>
+      ) : null}
       {panelError ? <p className="suggestions__error error">{panelError}</p> : null}
       {actions.length === 0 ? (
         <p className="suggestions__scanning">Scanning for suggestions...</p>

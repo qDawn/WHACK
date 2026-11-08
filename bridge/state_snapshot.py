@@ -1,3 +1,4 @@
+import copy
 from typing import Any
 
 from context.core.models import ContextSnapshot
@@ -8,6 +9,7 @@ def to_state_snapshot(
     suggestion: dict[str, str] | None = None,
     run_id: str = "live",
     actions: list[dict[str, str]] | None = None,
+    diagnostics: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """AG-UI STATE_SNAPSHOT the HUD renders as dashboard cards."""
 
@@ -21,6 +23,10 @@ def to_state_snapshot(
         payload["suggestion"] = suggestion
     if actions is not None:
         payload["actions"] = actions
+    if diagnostics is not None:
+        delivered = copy.deepcopy(diagnostics)
+        delivered["frontendDelivery"] = {"status": "ok", "message": "Snapshot published"}
+        payload["diagnostics"] = delivered
     return {
         "protocol": "ag-ui",
         "version": "1.0",

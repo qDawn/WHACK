@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties, type PointerEvent as ReactPointerEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import {
   clamp,
@@ -8,6 +8,7 @@ import {
   settle,
   type FrameBox,
 } from "../layout/geometry";
+import { sidebarEdge, sidebarMotion, sidebarOffscreenX, type SidebarEdge } from "../layout/sidebar";
 import type { Visibility } from "../layout/types";
 
 type DragSession = {
@@ -27,6 +28,12 @@ type ResizeSession = {
   originWidth: number;
   originHeight: number;
   anchor: "bottom-left" | "free";
+};
+
+type SidebarControl = {
+  visible: boolean;
+  animations: boolean;
+  onShow: () => void;
 };
 
 type PanelFrameProps = {
@@ -55,6 +62,13 @@ type PanelFrameProps = {
   onMinimise: () => void;
   onHide: () => void;
   onRestore: () => void;
+  /** Sidebar visibility. Hides the gear menu and slides the frame instead of minimising it. */
+  sidebar?: SidebarControl;
+  /** Hide and Minimise for dashboard panels. Widgets never show those controls. */
+  showMenu?: boolean;
+  widget?: boolean;
+  /** Edit-mode removal for a widget instance. */
+  onRemove?: () => void;
   children: ReactNode;
 };
 
@@ -66,7 +80,7 @@ function isInteractive(target: EventTarget | null): boolean {
 function onScrollbar(event: ReactPointerEvent<HTMLDivElement>): boolean {
   const target = event.target;
   if (!(target instanceof Element)) return false;
-  const scroller = target.closest(".suggestions, .window-stack");
+  const scroller = target.closest(".suggestions, .window-stack, .shortcut-widget__grid");
   if (!(scroller instanceof HTMLElement)) return false;
   if (scroller.scrollHeight <= scroller.clientHeight + 1) return false;
   const rect = scroller.getBoundingClientRect();
@@ -108,9 +122,15 @@ export default function PanelFrame({
   onMinimise,
   onHide,
   onRestore,
+  sidebar,
+  showMenu = true,
+  widget = false,
+  onRemove,
   children,
 }: PanelFrameProps) {
   const frameRef = useRef<HTMLDivElement>(null);
+  const handleRef = useRef<HTMLButtonElement>(null);
+  const wasVisible = useRef<boolean | null>(null);
   const gearRef = useRef<HTMLButtonElement>(null);
   const dragRef = useRef<DragSession | null>(null);
   const resizeRef = useRef<ResizeSession | null>(null);
@@ -118,7 +138,12 @@ export default function PanelFrame({
   const [dragging, setDragging] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [menuBox, setMenuBox] = useState<{ top: number; left: number } | null>(null);
-  const showSettings = hover || menuOpen || (editMode && selected);
+  const sidebarOn = sidebar !== undefined;
+  const [reduceMotion, setReduceMotion] = useState(
+    () => sidebarOn && window.matchMedia("(prefers-reduced-motion: reduce)").matches,
+  );
+  const [metrics, setMetrics] = useState({ left: 0, top: 0, width: 0, screen: 0 });
+  const showSettings = showMenu && !widget && !sidebarOn && (hover || menuOpen || (editMode && selected));
   const anchor = box.anchor;
 
   useEffect(() => {
@@ -144,6 +169,50 @@ export default function PanelFrame({
     document.addEventListener("pointerdown", onPointerDown);
     return () => document.removeEventListener("pointerdown", onPointerDown);
   }, [menuOpen]);
+
+  useEffect(() => {
+    if (!sidebarOn) return;
+    const media = window.matchMedia("(prefers-reduced-motion: reduce)");
+    const apply = () => setReduceMotion(media.matches);
+    apply();
+    media.addEventListener("change", apply);
+    return () => media.removeEventListener("change", apply);
+  }, [sidebarOn]);
+
+  useLayoutEffect(() => {
+    if (!sidebarOn) return;
+    const frame = frameRef.current;
+    if (!frame) return;
+    const measure = () => {
+      const parent = frame.offsetParent instanceof HTMLElement ? frame.offsetParent.getBoundingClientRect() : null;
+      const left = (parent?.left ?? 0) + frame.offsetLeft;
+      const top = (parent?.top ?? 0) + frame.offsetTop;
+      const width = frame.offsetWidth;
+      const screen = window.innerWidth;
+      setMetrics((current) =>
+        current.left === left && current.top === top && current.width === width && current.screen === screen
+          ? current
+          : { left, top, width, screen },
+      );
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(frame);
+    window.addEventListener("resize", measure);
+    return () => {
+      observer.disconnect();
+      window.removeEventListener("resize", measure);
+    };
+  }, [sidebarOn, box.left, box.top]);
+
+  useEffect(() => {
+    if (!sidebarOn) return;
+    const previous = wasVisible.current;
+    const visible = sidebar?.visible ?? true;
+    wasVisible.current = visible;
+    if (previous === true && !visible) handleRef.current?.focus();
+    if (previous === false && visible) frameRef.current?.querySelector<HTMLButtonElement>('[data-nav="sidebar"]')?.focus();
+  }, [sidebarOn, sidebar?.visible]);
 
   function emitMove(session: DragSession, dx: number, dy: number, commit: boolean) {
     const snapTo = commit ? settle : magnetic;
@@ -259,10 +328,21 @@ export default function PanelFrame({
     onRaise();
   }
 
+  const screen = metrics.screen > 0 ? metrics.screen : window.innerWidth;
+  const measured = metrics.width > 0 && screen > 0;
+  const originX = measured ? metrics.left : box.left;
+  const originY = measured ? metrics.top : box.top;
+  const edge: SidebarEdge = sidebarEdge(originX + (measured ? metrics.width / 2 : 0), screen);
+  const motion = sidebar ? sidebarMotion(sidebar.visible, sidebar.animations, reduceMotion) : null;
+  const shift = motion && !motion.visible && measured ? sidebarOffscreenX(edge, originX, metrics.width, screen) : 0;
+  const expanded = sidebar ? sidebar.visible : visibility === "visible";
+  const showRemove = widget && editMode && expanded && onRemove !== undefined;
+  const minimised = !sidebar && visibility === "minimised";
+
   const style: CSSProperties = { left: box.left, zIndex };
   if (anchor === "bottom-left") style.bottom = box.bottom ?? inset;
   else style.top = box.top;
-  if (visibility !== "minimised") {
+  if (!minimised) {
     if (box.width !== undefined) style.width = box.width;
     if (box.height !== undefined) style.height = box.height;
   }
@@ -301,14 +381,17 @@ export default function PanelFrame({
       : null;
 
   return (
+    <>
     <div
       ref={frameRef}
       className="panel-frame"
       style={style}
       data-panel={id}
+      data-widget={widget ? "true" : undefined}
       data-selected={selected ? "true" : "false"}
       data-dragging={dragging ? "true" : "false"}
-      data-minimised={visibility === "minimised" ? "true" : "false"}
+      data-minimised={minimised ? "true" : "false"}
+      data-sidebar={sidebar ? (sidebar.visible ? "on" : "off") : undefined}
       data-anchor={anchor}
       data-open={open === undefined ? undefined : open ? "true" : "false"}
       onPointerEnter={() => setHover(true)}
@@ -318,7 +401,7 @@ export default function PanelFrame({
       onPointerUp={endPointer}
       onPointerCancel={endPointer}
     >
-      {visibility === "minimised" ? (
+      {minimised ? (
         <div
           className="panel-pill glass-panel float-panel"
           role="button"
@@ -333,10 +416,19 @@ export default function PanelFrame({
         >
           <span className="panel-pill__label">{label}</span>
         </div>
+      ) : sidebar && motion ? (
+        <div
+          className="sidebar-slide"
+          data-edge={edge}
+          data-open={motion.visible ? "true" : "false"}
+          style={{ transform: `translateX(${shift}px)`, transition: motion.transition }}
+        >
+          {children}
+        </div>
       ) : (
         children
       )}
-      {editMode && visibility === "visible" ? (
+      {editMode && expanded ? (
         <>
           <div className="panel-frame__grip panel-frame__grip--top" aria-hidden="true" />
           <div className="panel-frame__grip panel-frame__grip--right" aria-hidden="true" />
@@ -344,7 +436,7 @@ export default function PanelFrame({
           <div className="panel-frame__grip panel-frame__grip--left" aria-hidden="true" />
         </>
       ) : null}
-      {resizable && editMode && visibility === "visible" ? (
+      {resizable && editMode && expanded ? (
         <button
           type="button"
           className={anchor === "bottom-left" ? "panel-frame__resize panel-frame__resize--top" : "panel-frame__resize"}
@@ -372,7 +464,46 @@ export default function PanelFrame({
           </button>
         </div>
       ) : null}
+      {showRemove ? (
+        <div className="panel-frame__settings">
+          <button type="button" className="panel-frame__remove" data-no-drag aria-label={`Remove ${label}`} onClick={() => onRemove?.()}>
+            Remove
+          </button>
+        </div>
+      ) : null}
       {menu}
     </div>
+    {sidebar && motion?.handle
+      ? createPortal(
+          <button
+            type="button"
+            ref={handleRef}
+            className="sidebar-handle glass-panel"
+            data-edge={edge}
+            data-no-drag
+            aria-label="Show sidebar"
+            style={{ top: originY }}
+            onPointerDown={(event) => event.stopPropagation()}
+            onClick={sidebar.onShow}
+          >
+            <svg
+              viewBox="0 0 24 24"
+              width="16"
+              height="16"
+              aria-hidden="true"
+              focusable="false"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="1.8"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            >
+              {edge === "left" ? <path d="M9 6l6 6-6 6" /> : <path d="M15 6l-6 6 6 6" />}
+            </svg>
+          </button>,
+          document.body,
+        )
+      : null}
+    </>
   );
 }

@@ -1,15 +1,21 @@
+import io
 import json
 import os
 import tempfile
 import threading
 import time
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
 from bridge.model import (
+    DIAGNOSTIC_STAGES,
     INSTRUCTIONS_PATH,
     ModelAdvisor,
+    ModelError,
+    ModelReport,
+    card_for_miss,
     chat_url,
     load_instructions,
     missing_openai_key,
@@ -18,6 +24,8 @@ from bridge.model import (
     prompt_for,
     suggest,
 )
+from bridge.rules import first_match
+from bridge.state_snapshot import to_state_snapshot
 from context.core.models import ContextSnapshot
 
 
@@ -167,7 +175,7 @@ class ModelTests(unittest.TestCase):
         calls: list[str] = []
         results: list[str | None] = []
 
-        def fake_suggest(current, entries, config):
+        def fake_suggest(current, entries, config, report=None):
             calls.append(current.note_body)
             return {"kind": "focus_discord", "title": "Discord", "detail": "Discord", "reason": "model", "source": "model"}
 
@@ -192,7 +200,7 @@ class ModelTests(unittest.TestCase):
         release = threading.Event()
         results: list[str | None] = []
 
-        def fake_suggest(current, entries, config):
+        def fake_suggest(current, entries, config, report=None):
             started.set()
             release.wait(1)
             return {"kind": "open_godot", "title": "Godot", "detail": "project", "reason": "model", "source": "model"}
@@ -214,6 +222,230 @@ class ModelTests(unittest.TestCase):
             self.assertEqual(results, [])
         finally:
             advisor.stop()
+
+    def test_missing_key_stays_offline_and_leaves_rules_and_history(self) -> None:
+        openai = {
+            "model": {
+                "baseUrl": "https://api.openai.com/v1",
+                "name": "gpt-4o-mini",
+                "apiKey": "",
+            }
+        }
+        missing = Path("does-not-exist-aura-secrets.json")
+        called = False
+
+        def post(settings, payload):
+            nonlocal called
+            called = True
+            return "open_godot"
+
+        history_card = {
+            "kind": "open_godot",
+            "title": "Godot",
+            "detail": "project",
+            "reason": "From your recent apps.",
+            "source": "history",
+        }
+        with patch.dict(os.environ, {"AURA_OPENAI_API_KEY": ""}):
+            report = ModelReport(log=False)
+            report.configure(openai, missing)
+            availability = report.public()["availability"]
+            self.assertIn(availability["status"], {"error", "skipped"})
+            self.assertFalse(availability["keyPresent"])
+            self.assertEqual(availability["host"], "api.openai.com")
+            self.assertEqual(availability["model"], "gpt-4o-mini")
+            self.assertNotIn("apiKey", json.dumps(report.public()))
+            self.assertIsNone(model_settings(openai, missing))
+            self.assertIsNone(
+                suggest(snapshot("hello"), ENTRIES, openai, post, secrets_path=missing, report=report)
+            )
+        self.assertFalse(called)
+        self.assertEqual(card_for_miss(history_card, None, failed=True), history_card)
+        matched = first_match(
+            ContextSnapshot(note_body="platformer"),
+            {
+                "rules": [
+                    {
+                        "id": "godot-from-note",
+                        "when": {"noteContains": "platformer"},
+                        "suggest": {
+                            "kind": "open_godot",
+                            "title": "Open the Godot project",
+                            "target": "${godotProject}",
+                        },
+                    }
+                ]
+            },
+            {"godotProject": "C:/games/platformer/project.godot"},
+        )
+        assert matched is not None
+        self.assertEqual(matched["kind"], "open_godot")
+        self.assertEqual(matched["source"], "rule")
+
+    def test_failed_attempt_keeps_the_last_model_card_and_does_not_retry(self) -> None:
+        calls: list[str] = []
+        results: list[str | None] = []
+        failures: list[str] = []
+        history_card = {
+            "kind": "open_terminal",
+            "title": "Terminal",
+            "detail": "repo",
+            "reason": "From your recent apps.",
+            "source": "history",
+        }
+
+        def fake_suggest(current, entries, config, report=None):
+            calls.append(current.note_body)
+            if current.note_body != "good":
+                if report is not None:
+                    report.fail_attempt("HTTP 500", "requestDelivery")
+                raise ModelError("HTTP 500")
+            return {
+                "kind": "open_godot",
+                "title": "Godot",
+                "detail": "project",
+                "reason": "model",
+                "source": "model",
+            }
+
+        advisor = ModelAdvisor(
+            CONFIG,
+            ENTRIES,
+            lambda current, suggestion: results.append(None if suggestion is None else suggestion["kind"]),
+            fake_suggest,
+            debounce_s=0.01,
+            on_failure=lambda current, message: failures.append(message),
+            report=ModelReport(log=False),
+        )
+        advisor.start()
+        try:
+            advisor.consider(snapshot("good"))
+            self.assertTrue(_wait_for(lambda: results == ["open_godot"]))
+            advisor.consider(snapshot("bad"))
+            self.assertTrue(_wait_for(lambda: calls == ["good", "bad"] and len(failures) == 1))
+            self.assertEqual(advisor.last_success()["kind"], "open_godot")
+            self.assertEqual(card_for_miss(history_card, advisor.last_success(), failed=True)["kind"], "open_godot")
+            self.assertEqual(advisor._report.public()["lastError"]["status"], "error")
+            self.assertNotIn("secret-key", json.dumps(advisor._report.public()))
+            advisor.consider(snapshot("bad"))
+            time.sleep(0.12)
+            self.assertEqual(calls, ["good", "bad"])
+            advisor.consider(snapshot("later"))
+            self.assertTrue(_wait_for(lambda: calls == ["good", "bad", "later"]))
+        finally:
+            advisor.stop()
+
+        self.assertEqual(card_for_miss(history_card, None, failed=True)["source"], "history")
+
+        def reject(settings, payload):
+            raise ModelError("Reply was not a chat completion", stage="responseRetrieval")
+
+        parse_report = ModelReport(log=False)
+        with self.assertRaises(ModelError):
+            suggest(snapshot("unrelated note"), ENTRIES, CONFIG, reject, report=parse_report)
+        self.assertEqual(parse_report.public()["requestDelivery"]["status"], "ok")
+        self.assertEqual(parse_report.public()["responseRetrieval"]["status"], "error")
+        self.assertEqual(parse_report.public()["lastError"]["status"], "error")
+        self.assertEqual(
+            card_for_miss(history_card, {"kind": "open_godot", "title": "Godot", "detail": "project", "reason": "model", "source": "model"}, failed=True)["source"],
+            "model",
+        )
+
+    def test_closed_port_fails_without_leaking_the_prompt(self) -> None:
+        note = "NOTEBODY-TOKEN-9481"
+        clip = "CLIPBOARD-TOKEN-9481"
+        title = "WINDOWTITLE-TOKEN-9481"
+        current = ContextSnapshot(
+            note_body=note,
+            clipboard_enabled=True,
+            clipboard_text=clip,
+            process_name="Code.exe",
+            window_title=title,
+        )
+        report = ModelReport(log=True)
+        captured = io.StringIO()
+        with redirect_stdout(captured):
+            with self.assertRaises(ModelError):
+                suggest(current, ENTRIES, CONFIG, report=report)
+        logged = captured.getvalue()
+        diagnostics = json.dumps(report.public())
+        self.assertEqual(report.public()["requestDelivery"]["status"], "error")
+        self.assertEqual(report.public()["inferenceCompletion"]["status"], "skipped")
+        self.assertNotIn("secret-key", logged)
+        self.assertNotIn("secret-key", diagnostics)
+        self.assertNotIn(note, logged)
+        self.assertNotIn(note, diagnostics)
+        self.assertNotIn(clip, logged)
+        self.assertNotIn(clip, diagnostics)
+        self.assertNotIn(title, diagnostics)
+        self.assertIn("Code.exe", diagnostics)
+        self.assertEqual(report.public()["contextSupplied"]["noteLength"], len(note))
+        self.assertEqual(report.public()["contextSupplied"]["clipboardLength"], len(clip))
+        self.assertTrue(report.public()["contextSupplied"]["windowTitlePresent"])
+
+    def test_successful_fake_reply_updates_the_suggestion_and_diagnostics(self) -> None:
+        report = ModelReport(log=False)
+
+        def post(settings, payload):
+            return "focus_discord"
+
+        suggestion = suggest(snapshot("unrelated note"), ENTRIES, CONFIG, post, report=report)
+        assert suggestion is not None
+        self.assertEqual(suggestion["kind"], "focus_discord")
+        self.assertEqual(suggestion["source"], "model")
+        self.assertEqual(report.public()["inferenceCompletion"]["status"], "ok")
+        self.assertEqual(report.public()["responseRetrieval"]["status"], "ok")
+        history_card = {
+            "kind": "open_godot",
+            "title": "Godot",
+            "detail": "project",
+            "reason": "From your recent apps.",
+            "source": "history",
+        }
+        shown = card_for_miss(history_card, None, model_card=suggestion)
+        assert shown is not None
+        self.assertEqual(shown["kind"], "focus_discord")
+        message = to_state_snapshot(snapshot("unrelated note"), shown, diagnostics=report.public())
+        self.assertEqual(message["payload"]["suggestion"]["kind"], "focus_discord")
+        self.assertEqual(message["payload"]["diagnostics"]["inferenceCompletion"]["status"], "ok")
+        self.assertEqual(message["payload"]["diagnostics"]["responseRetrieval"]["status"], "ok")
+        self.assertEqual(message["payload"]["diagnostics"]["frontendDelivery"]["status"], "ok")
+
+    def test_snapshot_diagnostics_omit_secrets_that_the_hud_already_receives(self) -> None:
+        note = "NOTEBODY-TOKEN-9481"
+        clip = "CLIPBOARD-TOKEN-9481"
+        title = "WINDOWTITLE-TOKEN-9481"
+        current = ContextSnapshot(
+            note_body=note,
+            clipboard_enabled=True,
+            clipboard_text=clip,
+            process_name="Code.exe",
+            window_title=title,
+        )
+        report = ModelReport(log=False)
+
+        def post(settings, payload):
+            self.assertIn(note, payload["messages"][1]["content"])
+            self.assertIn(clip, payload["messages"][1]["content"])
+            self.assertNotIn("secret-key", payload["messages"][1]["content"])
+            return "open_terminal"
+
+        suggestion = suggest(current, ENTRIES, CONFIG, post, report=report)
+        message = to_state_snapshot(current, suggestion, diagnostics=report.public())
+        self.assertEqual(message["payload"]["noteBody"], note)
+        self.assertEqual(message["payload"]["title"], title)
+        diagnostics = json.dumps(message["payload"]["diagnostics"])
+        self.assertNotIn(note, diagnostics)
+        self.assertNotIn(clip, diagnostics)
+        self.assertNotIn("secret-key", diagnostics)
+        self.assertNotIn(title, diagnostics)
+        self.assertNotIn("secret-key", json.dumps(message))
+        self.assertNotIn(clip, json.dumps(message))
+        for name in DIAGNOSTIC_STAGES:
+            self.assertIn(name, message["payload"]["diagnostics"])
+        self.assertEqual(message["payload"]["diagnostics"]["availability"]["keyPresent"], True)
+        self.assertEqual(message["payload"]["diagnostics"]["availability"]["host"], "127.0.0.1")
+        self.assertNotIn("/v1", json.dumps(message["payload"]["diagnostics"]["availability"]))
 
 
 def _wait_for(check) -> bool:

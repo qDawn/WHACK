@@ -5,7 +5,7 @@ import threading
 from pathlib import Path
 
 from bridge.launch import cards, load_entries, parse_action, perform
-from bridge.model import ModelAdvisor, missing_openai_key, model_settings, suggest
+from bridge.model import ModelAdvisor, ModelReport, card_for_miss, missing_openai_key, model_settings, suggest
 from bridge.pipe_server import serve, serve_actions
 from bridge.rank import top_cards
 from bridge.rules import first_match, load_json, project_paths
@@ -52,6 +52,32 @@ def open_history(config: dict) -> FocusStore | None:
         return None
 
 
+def accept_action(
+    line: str,
+    entries: list,
+    config: dict,
+    url: str,
+    perform_fn=perform,
+    on_shown=None,
+) -> str:
+    """Launch one catalog action. ``hud.shown`` is not a launch."""
+
+    try:
+        parsed = json.loads(line)
+    except json.JSONDecodeError:
+        parsed = None
+    if isinstance(parsed, dict) and parsed.get("type") == "hud.shown":
+        if on_shown is not None:
+            on_shown()
+        return "shown"
+    if isinstance(parsed, dict) and parsed.get("kind") == "open_url":
+        perform_fn("open_url", config, entries, target=url)
+        return "open_url"
+    kind = parse_action(line, entries)
+    perform_fn(kind, config, entries)
+    return kind
+
+
 def read_process_history(store: FocusStore | None) -> dict[str, list]:
     """The compact history the model may see. A read error leaves the history empty."""
 
@@ -91,94 +117,77 @@ def main() -> None:
     actions = cards(entries, config)
     url_lock = threading.Lock()
     matched_url = {"value": ""}
-
-    def on_action(line: str) -> None:
-        requested_kind: str | None = None
-        resolved_kind: str | None = None
-        try:
-            parsed = json.loads(line)
-            requested = parsed.get("kind") if isinstance(parsed, dict) else None
-            if isinstance(requested, str):
-                requested_kind = requested
-            if requested == "open_url":
-                with url_lock:
-                    url = matched_url["value"]
-                resolved_kind = "open_url"
-                perform("open_url", config, entries, target=url)
-            else:
-                resolved_kind = parse_action(line, entries)
-                perform(resolved_kind, config, entries)
-        except Exception as exc:
-            print(f"Open failed: {exc}", flush=True)
-            error_line: dict[str, str] = {
-                "protocol": "aura",
-                "type": "hud.error",
-                "message": str(exc),
-            }
-            error_kind = resolved_kind if isinstance(resolved_kind, str) else requested_kind
-            if isinstance(error_kind, str):
-                error_line["kind"] = error_kind
-            outbox.push(json.dumps(error_line))
-            return
-        print(f"Opened {resolved_kind}", flush=True)
-        outbox.push(json.dumps({"protocol": "aura", "type": "hud.hide"}))
-
-    def on_model(snapshot: ContextSnapshot, suggestion: dict[str, str] | None) -> None:
-        if suggestion is None:
-            print("Model chose none", flush=True)
-            return
-        message = to_state_snapshot(
-            snapshot,
-            suggestion,
-            actions=top_cards(
-                actions,
-                suggestion,
-                read_process_history(history_holder["store"]),
-                limit=8,
-            ),
-        )
-        outbox.set_snapshot(json.dumps(message, ensure_ascii=False))
-        print(f"Suggested {suggestion['kind']} from model", flush=True)
-
     history_holder: dict[str, FocusStore | None] = {"store": None}
-
-    def suggest_from_history(
-        snapshot: ContextSnapshot,
-        catalog: list[dict],
-        current_config: dict,
-    ) -> dict[str, str] | None:
-        return suggest(
-            snapshot,
-            catalog,
-            current_config,
-            history=read_process_history(history_holder["store"]),
-        )
-
-    advisor = None
-    if model_settings(config) is not None:
-        advisor = ModelAdvisor(config, entries, on_model, suggest_from_history)
-        advisor.start()
-        print("Model is on. It runs only when no rule matches.", flush=True)
-    elif missing_openai_key(config):
-        print(
-            "Model is off. Add the key to aura.secrets.json or AURA_OPENAI_API_KEY.",
-            flush=True,
-        )
-    else:
-        print("Model is off. Rules only.", flush=True)
+    report = ModelReport()
+    report.configure(config)
+    advisor: ModelAdvisor | None = None
 
     def publish_match(
         current: ContextSnapshot,
         suggestion: dict[str, str] | None,
         shown: list[dict[str, str]],
     ) -> None:
-        message = to_state_snapshot(current, suggestion, actions=shown)
+        report.set("frontendDelivery", "ok", "Snapshot published")
+        message = to_state_snapshot(
+            current,
+            suggestion,
+            actions=shown,
+            diagnostics=report.public(),
+        )
         outbox.set_snapshot(json.dumps(message, ensure_ascii=False))
 
-    def on_event(event: ContextEvent, snapshot: ContextSnapshot) -> None:
-        remember_window(history_holder["store"], event)
-        if event.event_type not in HUD_EVENT_TYPES:
+    def publish_miss(
+        snapshot: ContextSnapshot,
+        *,
+        failed: bool = False,
+        model_card: dict[str, str] | None = None,
+    ) -> None:
+        history = read_process_history(history_holder["store"])
+        ranked = top_cards(actions, None, history, limit=8)
+        history_suggestion = None
+        if ranked:
+            history_suggestion = {
+                "kind": ranked[0]["kind"],
+                "title": ranked[0]["title"],
+                "detail": ranked[0]["detail"],
+                "reason": "From your recent apps.",
+                "source": "history",
+            }
+        held = advisor.last_success() if advisor is not None else None
+        suggestion = card_for_miss(
+            history_suggestion,
+            held,
+            failed=failed,
+            model_card=model_card,
+        )
+        publish_match(snapshot, suggestion, top_cards(actions, suggestion, history, limit=8))
+
+    def on_model(snapshot: ContextSnapshot, suggestion: dict[str, str] | None) -> None:
+        if suggestion is None:
+            print("Model chose none", flush=True)
+            publish_miss(snapshot)
             return
+        publish_miss(snapshot, model_card=suggestion)
+        print(f"Suggested {suggestion['kind']} from model", flush=True)
+
+    def on_failure(snapshot: ContextSnapshot, _message: str) -> None:
+        publish_miss(snapshot, failed=True)
+
+    def suggest_from_history(
+        snapshot: ContextSnapshot,
+        catalog: list[dict],
+        current_config: dict,
+        report: ModelReport | None = None,
+    ) -> dict[str, str] | None:
+        return suggest(
+            snapshot,
+            catalog,
+            current_config,
+            history=read_process_history(history_holder["store"]),
+            report=report,
+        )
+
+    def consider_snapshot(snapshot: ContextSnapshot) -> None:
         suggestion = first_match(snapshot, rules, config)
         history = read_process_history(history_holder["store"])
         shown = actions
@@ -196,24 +205,79 @@ def main() -> None:
         with url_lock:
             matched_url["value"] = url
         if suggestion is not None:
+            report.rule_matched()
             if advisor is not None:
                 advisor.cancel()
             publish_match(snapshot, suggestion, top_cards(shown, suggestion, history, limit=8))
             print(f"Suggested {suggestion['kind']}", flush=True)
             return
-        ranked = top_cards(actions, None, history, limit=8)
-        if ranked:
-            suggestion = {
-                "kind": ranked[0]["kind"],
-                "title": ranked[0]["title"],
-                "detail": ranked[0]["detail"],
-                "reason": "From your recent apps.",
-                "source": "history",
-            }
-        publish_match(snapshot, suggestion, ranked)
+        publish_miss(snapshot)
         print("No rule matched", flush=True)
         if advisor is not None:
             advisor.consider(snapshot)
+
+    def consider_shown() -> None:
+        consider_snapshot(manager.snapshot())
+
+    def on_action(line: str) -> None:
+        requested_kind: str | None = None
+        resolved_kind: str | None = None
+        try:
+            try:
+                preview = json.loads(line)
+            except json.JSONDecodeError:
+                preview = None
+            if isinstance(preview, dict) and isinstance(preview.get("kind"), str):
+                requested_kind = preview["kind"]
+            with url_lock:
+                url = matched_url["value"]
+            resolved_kind = accept_action(line, entries, config, url, perform, consider_shown)
+            if resolved_kind == "shown":
+                return
+        except Exception as exc:
+            print(f"Open failed: {exc}", flush=True)
+            error_line: dict[str, str] = {
+                "protocol": "aura",
+                "type": "hud.error",
+                "message": str(exc),
+            }
+            error_kind = resolved_kind if isinstance(resolved_kind, str) else requested_kind
+            if isinstance(error_kind, str):
+                error_line["kind"] = error_kind
+            outbox.push(json.dumps(error_line))
+            return
+        print(f"Opened {resolved_kind}", flush=True)
+        outbox.push(json.dumps({"protocol": "aura", "type": "hud.hide"}))
+
+    def on_event(event: ContextEvent, snapshot: ContextSnapshot) -> None:
+        remember_window(history_holder["store"], event)
+        if event.event_type not in HUD_EVENT_TYPES:
+            return
+        consider_snapshot(snapshot)
+
+    if model_settings(config) is not None:
+        advisor = ModelAdvisor(
+            config,
+            entries,
+            on_model,
+            suggest_from_history,
+            on_failure=on_failure,
+            report=report,
+        )
+        advisor.start()
+        report.set("initialisation", "ok", "Model advisor started")
+        print("Model is on. It runs only when no rule matches.", flush=True)
+    elif missing_openai_key(config):
+        report.set("initialisation", "skipped", "Model was not started")
+        report.mark_unavailable()
+        print(
+            "Model is off. Add the key to aura.secrets.json or AURA_OPENAI_API_KEY.",
+            flush=True,
+        )
+    else:
+        report.set("initialisation", "skipped", "Model was not started")
+        report.mark_unavailable()
+        print("Model is off. Rules only.", flush=True)
 
     history_holder["store"] = open_history(config)
     manager.subscribe(on_event)

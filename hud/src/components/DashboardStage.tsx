@@ -5,6 +5,9 @@ import { PANEL_IDS, PANEL_LABELS } from "../layout/types";
 import type { DashboardController } from "../layout/useDashboardLayout";
 import { runningInTauri } from "../tauri";
 import { widgetByType } from "../widgets/registry";
+import { WidgetRuntimeProvider } from "../widgets/runtime";
+import type { ModelDiagnostics } from "../modelDiagnostics";
+import ModelDiagnosticsPanel from "./ModelDiagnosticsPanel";
 import NavBar, { type NavBarHandle } from "./NavBar";
 import PanelFrame from "./PanelFrame";
 import QuickNote from "./QuickNote";
@@ -19,6 +22,8 @@ type DashboardStageProps = {
   suggestedKind: string | null;
   reason: string | null;
   error: SuggestionError | null;
+  modelStatus: string | null;
+  diagnostics: ModelDiagnostics | null;
   onOpen: (kind: string) => void;
   onHoldChange: (held: boolean) => void;
   note: string;
@@ -43,6 +48,8 @@ export default function DashboardStage({
   suggestedKind,
   reason,
   error,
+  modelStatus,
+  diagnostics,
   onOpen,
   onHoldChange,
   note,
@@ -53,15 +60,25 @@ export default function DashboardStage({
   noteRef,
 }: DashboardStageProps) {
   const [libraryOpen, setLibraryOpen] = useState(false);
+  const [diagnosticsOpen, setDiagnosticsOpen] = useState(false);
+  const [pendingRemoval, setPendingRemoval] = useState<string | null>(null);
   const [keyRegion, setKeyRegion] = useState<KeyRegion | null>(null);
   const libraryOpenRef = useRef(false);
+  const diagnosticsOpenRef = useRef(false);
+  const pendingRemovalRef = useRef<string | null>(null);
   const keyRegionRef = useRef<KeyRegion | null>(null);
   const navRef = useRef<NavBarHandle>(null);
   const windowsRef = useRef<WindowStackHandle>(null);
   const suggestionsRef = useRef<SuggestionsHandle>(null);
   libraryOpenRef.current = libraryOpen;
+  diagnosticsOpenRef.current = diagnosticsOpen;
+  pendingRemovalRef.current = pendingRemoval;
   keyRegionRef.current = keyRegion;
   const { layout, stage, editMode, selectedId } = dashboard;
+
+  useEffect(() => {
+    if (!editMode) setPendingRemoval(null);
+  }, [editMode]);
 
   useEffect(() => {
     function onKeyDown(event: KeyboardEvent) {
@@ -69,6 +86,14 @@ export default function DashboardStage({
       if (event.key === "Escape") {
         if (event.repeat) return;
         event.preventDefault();
+        if (pendingRemovalRef.current) {
+          setPendingRemoval(null);
+          return;
+        }
+        if (diagnosticsOpenRef.current) {
+          setDiagnosticsOpen(false);
+          return;
+        }
         if (libraryOpenRef.current) {
           setLibraryOpen(false);
           return;
@@ -82,42 +107,49 @@ export default function DashboardStage({
       const windows = windowsRef.current;
       const suggestions = suggestionsRef.current;
 
-      if (event.key === "ArrowLeft") {
+      if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
+        const region = keyRegionRef.current;
+        if (region === "suggestions") {
+          if (event.key !== "ArrowLeft") return;
+          if (!windows || windows.count() === 0) return;
+          event.preventDefault();
+          suggestions?.setKeyboardHold(false);
+          windows.setKeyboardHold(true);
+          windows.focusSelection();
+          keyRegionRef.current = "windows";
+          setKeyRegion("windows");
+          return;
+        }
         if (!windows || windows.count() === 0) return;
         event.preventDefault();
         suggestions?.setKeyboardHold(false);
         windows.setKeyboardHold(true);
-        windows.focusSelection();
+        windows.move(event.key === "ArrowRight" ? 1 : -1);
         keyRegionRef.current = "windows";
         setKeyRegion("windows");
-        return;
-      }
-      if (event.key === "ArrowRight") {
-        if (!suggestions || suggestions.count() === 0) return;
-        event.preventDefault();
-        windows?.setKeyboardHold(false);
-        suggestions.setKeyboardHold(true);
-        suggestions.focusSelection();
-        keyRegionRef.current = "suggestions";
-        setKeyRegion("suggestions");
         return;
       }
       if (event.key === "ArrowUp" || event.key === "ArrowDown") {
         const region = keyRegionRef.current;
         const delta = event.key === "ArrowDown" ? 1 : -1;
-        if (region === "windows") {
-          if (!windows || windows.count() === 0) return;
-          event.preventDefault();
-          windows.setKeyboardHold(true);
-          windows.move(delta);
-          return;
-        }
         if (region === "suggestions") {
           if (!suggestions || suggestions.count() === 0) return;
           event.preventDefault();
           suggestions.setKeyboardHold(true);
           suggestions.move(delta);
+          return;
         }
+        if (event.key === "ArrowDown") {
+          if (!suggestions || suggestions.count() === 0) return;
+          event.preventDefault();
+          windows?.setKeyboardHold(false);
+          suggestions.setKeyboardHold(true);
+          suggestions.focusSelection();
+          keyRegionRef.current = "suggestions";
+          setKeyRegion("suggestions");
+          return;
+        }
+        if (region === "windows") event.preventDefault();
         return;
       }
       if (event.key === "Enter" && !event.repeat) {
@@ -140,22 +172,10 @@ export default function DashboardStage({
     return () => document.removeEventListener("keydown", onKeyDown);
   }, []);
 
-  const shortcuts =
-    layout?.shortcuts.map((id) => ({
-      id,
-      title: dashboard.catalog.find((entry) => entry.id === id)?.title ?? id,
-    })) ?? [];
-
   const hidden: HiddenPiece[] = [];
   if (layout) {
-    for (const id of PANEL_IDS) {
+    for (const id of ["window-stack", "suggestions", "quick-note"] as const) {
       if (layout.panels[id].visibility === "hidden") hidden.push({ id, title: PANEL_LABELS[id] });
-    }
-    for (const widget of layout.widgets) {
-      if (widget.visibility !== "hidden") continue;
-      const registration = widgetByType(widget.type);
-      if (!registration) continue;
-      hidden.push({ id: widget.id, title: registration.title });
     }
   }
 
@@ -178,11 +198,48 @@ export default function DashboardStage({
     };
   }
 
+  const pending = layout?.widgets.find((widget) => widget.id === pendingRemoval) ?? null;
+  const pendingTitle = pending ? (widgetByType(pending.type)?.title ?? "widget") : "";
+
   return (
     <>
       <Workspace onAdd={() => setLibraryOpen(true)} />
       {layout && stage
         ? PANEL_IDS.map((id) => {
+            if (id === "nav") {
+              const nav = layout.panels.nav;
+              return (
+                <PanelFrame
+                  key={id}
+                  id={id}
+                  label={PANEL_LABELS[id]}
+                  visibility="visible"
+                  zIndex={nav.z}
+                  box={panelFrame(nav, stage)}
+                  sidebar={{
+                    visible: nav.visible,
+                    animations: layout.animations,
+                    onShow: () => dashboard.setNavVisible(true),
+                  }}
+                  {...bind(id)}
+                >
+                  <NavBar
+                    ref={navRef}
+                    editMode={editMode}
+                    snap={layout.snap}
+                    animations={layout.animations}
+                    layoutError={dashboard.layoutError}
+                    onToggleEdit={dashboard.toggleEdit}
+                    onToggleSnap={dashboard.toggleSnap}
+                    onToggleAnimations={dashboard.toggleAnimations}
+                    onReset={dashboard.reset}
+                    sidebarVisible={nav.visible}
+                    onSidebarVisible={dashboard.setNavVisible}
+                    onOpenModelDiagnostics={() => setDiagnosticsOpen(true)}
+                  />
+                </PanelFrame>
+              );
+            }
             const placement = layout.panels[id];
             if (placement.visibility === "hidden") return null;
             if (id === "quick-note") {
@@ -220,28 +277,7 @@ export default function DashboardStage({
             }
             const box = panelFrame(placement, stage);
             const child =
-              id === "nav" ? (
-                <NavBar
-                  ref={navRef}
-                  editMode={editMode}
-                  snap={layout.snap}
-                  animations={layout.animations}
-                  shortcuts={shortcuts}
-                  catalog={dashboard.catalog}
-                  catalogStatus={dashboard.catalogStatus}
-                  catalogError={dashboard.catalogError}
-                  error={error}
-                  layoutError={dashboard.layoutError}
-                  onToggleEdit={dashboard.toggleEdit}
-                  onToggleSnap={dashboard.toggleSnap}
-                  onToggleAnimations={dashboard.toggleAnimations}
-                  onReset={dashboard.reset}
-                  onPin={dashboard.pin}
-                  onActivate={onOpen}
-                  onRemove={dashboard.unpin}
-                  onReorder={dashboard.reorderShortcut}
-                />
-              ) : id === "window-stack" ? (
+              id === "window-stack" ? (
                 <WindowStack ref={windowsRef} />
               ) : (
                 <Suggestions
@@ -250,6 +286,7 @@ export default function DashboardStage({
                   suggestedKind={suggestedKind}
                   reason={reason}
                   error={error}
+                  modelStatus={modelStatus}
                   onOpen={onOpen}
                   onHoldChange={onHoldChange}
                   keyboardActive={keyRegion === "suggestions"}
@@ -262,41 +299,118 @@ export default function DashboardStage({
             );
           })
         : null}
-      {layout && stage
-        ? layout.widgets.map((instance) => {
-            if (instance.visibility === "hidden") return null;
-            const registration = widgetByType(instance.type);
-            if (!registration) return null;
-            const size = registration.sizes.find((item) => item.id === instance.variant) ?? registration.sizes[0];
-            if (!size) return null;
-            const Widget = registration.Widget;
-            const box = { ...panelFrame(instance, stage), width: size.width, height: size.height };
-            return (
-              <PanelFrame
-                key={instance.id}
-                id={instance.id}
-                label={registration.title}
-                visibility={instance.visibility}
-                zIndex={instance.z}
-                box={box}
-                {...bind(instance.id)}
-              >
-                <div className="widget-host">
-                  <Widget instanceId={instance.id} />
-                </div>
-              </PanelFrame>
-            );
-          })
-        : null}
+      <WidgetRuntimeProvider
+        editMode={editMode}
+        actions={actions}
+        catalog={dashboard.catalog}
+        catalogStatus={dashboard.catalogStatus}
+        catalogError={dashboard.catalogError}
+        error={error}
+        layout={layout}
+        widgetState={dashboard.widgetState}
+        setVariant={dashboard.setShortcutVariant}
+        addShortcut={dashboard.addShortcut}
+        removeShortcut={dashboard.removeShortcut}
+        onOpen={onOpen}
+      >
+        {layout && stage
+          ? layout.widgets.map((instance) => {
+              if (instance.visibility === "hidden") return null;
+              const registration = widgetByType(instance.type);
+              if (!registration) return null;
+              const size = registration.sizes.find((item) => item.id === instance.variant) ?? registration.sizes[0];
+              if (!size) return null;
+              const Widget = registration.Widget;
+              const box = { ...panelFrame(instance, stage), width: size.width, height: size.height };
+              return (
+                <PanelFrame
+                  key={instance.id}
+                  id={instance.id}
+                  label={registration.title}
+                  visibility={instance.visibility}
+                  zIndex={instance.z}
+                  box={box}
+                  showMenu={false}
+                  widget
+                  {...bind(instance.id)}
+                  onRemove={() => setPendingRemoval(instance.id)}
+                >
+                  <div className="widget-host">
+                    <Widget instanceId={instance.id} />
+                  </div>
+                </PanelFrame>
+              );
+            })
+          : null}
+      </WidgetRuntimeProvider>
+      {diagnosticsOpen ? (
+        <ModelDiagnosticsPanel diagnostics={diagnostics} onClose={() => setDiagnosticsOpen(false)} />
+      ) : null}
       {libraryOpen ? (
         <WidgetLibrary
           hidden={hidden}
           widgets={layout?.widgets ?? []}
+          widgetState={dashboard.widgetState}
           onAdd={dashboard.addWidget}
           onRestore={dashboard.restore}
+          onRestoreWidget={dashboard.restoreWidget}
           onClose={() => setLibraryOpen(false)}
         />
       ) : null}
+      {pending ? (
+        <WidgetRemoveDialog
+          title={pendingTitle}
+          onKeep={() => {
+            dashboard.removeWidget(pending.id, "keep");
+            setPendingRemoval(null);
+          }}
+          onDelete={() => {
+            dashboard.removeWidget(pending.id, "delete");
+            setPendingRemoval(null);
+          }}
+          onCancel={() => setPendingRemoval(null)}
+        />
+      ) : null}
     </>
+  );
+}
+
+function WidgetRemoveDialog({
+  title,
+  onKeep,
+  onDelete,
+  onCancel,
+}: {
+  title: string;
+  onKeep: () => void;
+  onDelete: () => void;
+  onCancel: () => void;
+}) {
+  return (
+    <div className="widget-remove__backdrop" onPointerDown={onCancel}>
+      <div
+        className="widget-remove glass-panel"
+        role="dialog"
+        aria-modal="true"
+        aria-label={`Remove ${title}`}
+        onPointerDown={(event) => event.stopPropagation()}
+      >
+        <h2 className="widget-remove__title">Remove {title}</h2>
+        <p className="widget-remove__text">
+          Keep configuration takes this widget off the stage and leaves its saved shortcuts. Delete configuration removes those shortcuts as well.
+        </p>
+        <div className="widget-remove__actions">
+          <button type="button" className="glass-menu__item" onClick={onKeep}>
+            Keep configuration
+          </button>
+          <button type="button" className="glass-menu__item" onClick={onDelete}>
+            Delete configuration
+          </button>
+          <button type="button" className="glass-menu__item" onClick={onCancel}>
+            Cancel
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }

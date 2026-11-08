@@ -7,6 +7,7 @@ use std::time::Duration;
 
 use tauri::{Emitter, Manager};
 
+mod glass;
 mod window_switcher;
 
 #[derive(Clone, serde::Serialize)]
@@ -213,16 +214,28 @@ fn emit_visibility(app: &tauri::AppHandle, visible: bool) {
 }
 
 /// Sizes the window to the full bounds of the monitor under the cursor
-/// (monitor position + size, including the taskbar).
+/// (monitor position + size, including the taskbar) and clips the blur to the
+/// inset rounded sheet. The clear margin still belongs to this window, so the
+/// taskbar is covered and is not a click target. Aura does not hide the taskbar.
 /// Exclusive fullscreen games are a known limitation; Aura does not inject into them.
-fn fit_cursor_monitor(window: &tauri::WebviewWindow) {
+fn fit_cursor_monitor(window: &tauri::WebviewWindow) -> bool {
     let Some(monitor) = monitor_under_cursor(window) else {
-        return;
+        return false;
     };
     let origin = monitor.position();
     let size = monitor.size();
     let _ = window.set_position(tauri::PhysicalPosition::new(origin.x, origin.y));
     let _ = window.set_size(tauri::PhysicalSize::new(size.width, size.height));
+    apply_glass_blur(window, size.width, size.height);
+    true
+}
+
+fn apply_glass_blur(window: &tauri::WebviewWindow, width: u32, height: u32) {
+    let Ok(hwnd) = window.hwnd() else {
+        return;
+    };
+    let scale = window.scale_factor().unwrap_or(1.0);
+    glass::apply_glass_blur(hwnd, width, height, scale);
 }
 
 fn monitor_under_cursor(window: &tauri::WebviewWindow) -> Option<tauri::Monitor> {
@@ -243,8 +256,14 @@ fn apply_visible(app: &tauri::AppHandle, visible: bool) {
         fit_cursor_monitor(&window);
         let _ = window.show();
         // The taskbar is also topmost; set this again after show so Aura is above it.
+        // The window still covers the monitor. The blur region is inset; the margin
+        // stays clear and is not click-through.
         let _ = window.set_always_on_top(true);
-        fit_cursor_monitor(&window);
+        if !fit_cursor_monitor(&window) {
+            if let Ok(size) = window.inner_size() {
+                apply_glass_blur(&window, size.width, size.height);
+            }
+        }
         let _ = window.set_focus();
     } else {
         let _ = window.hide();
@@ -372,16 +391,7 @@ fn listen_for_snapshots(app: tauri::AppHandle) {
     }
 }
 
-#[tauri::command]
-fn open_action(kind: String) -> Result<(), String> {
-    if kind.is_empty()
-        || !kind
-            .chars()
-            .all(|character| character.is_ascii_alphanumeric() || character == '_' || character == '-')
-    {
-        return Err("Unknown action".to_string());
-    }
-    let line = format!("{{\"kind\":\"{kind}\"}}\n");
+fn write_action_line(line: &str) -> Result<(), String> {
     let mut last_error = String::from("Watcher is not running");
     for _ in 0..8 {
         match OpenOptions::new()
@@ -401,21 +411,119 @@ fn open_action(kind: String) -> Result<(), String> {
     Err(last_error)
 }
 
+#[tauri::command]
+fn open_action(kind: String) -> Result<(), String> {
+    if kind.is_empty()
+        || !kind
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || character == '_' || character == '-')
+    {
+        return Err("Unknown action".to_string());
+    }
+    write_action_line(&format!("{{\"kind\":\"{kind}\"}}\n"))
+}
+
+/// Not a launch. Python ignores this type and runs one consider.
+#[tauri::command]
+fn notify_hud_shown() -> Result<(), String> {
+    write_action_line("{\"protocol\":\"aura\",\"type\":\"hud.shown\"}\n")
+}
+
 // Exclusive fullscreen games cannot be covered. Aura does not inject into them.
 // Handles cross the bridge as decimal strings; a 64-bit HWND does not fit in a JavaScript number.
 // These commands do not use the catalog action pipe.
 #[tauri::command]
-fn list_windows(app: tauri::AppHandle) -> Result<Vec<window_switcher::ListedWindow>, String> {
+fn list_windows(app: tauri::AppHandle) -> Result<window_switcher::WindowList, String> {
     let window = app
         .get_webview_window("main")
         .ok_or_else(|| "Aura window is not open".to_string())?;
     let own = window.hwnd().map_err(|error| error.to_string())?;
-    window_switcher::list_windows(own)
+    window_switcher::set_own_hwnd(own);
+    Ok(window_switcher::WindowList {
+        windows: window_switcher::list_windows(own)?,
+        foreground_hwnd: window_switcher::foreground_hwnd(),
+    })
 }
 
 #[tauri::command]
-fn capture_window(hwnd: String) -> window_switcher::WindowPreview {
-    window_switcher::capture_window(&hwnd)
+async fn capture_window(hwnd: String, cache_only: Option<bool>) -> window_switcher::WindowPreview {
+    let cache_only = cache_only.unwrap_or(false);
+    match tauri::async_runtime::spawn_blocking(move || window_switcher::capture_window(&hwnd, cache_only)).await {
+        Ok(preview) => preview,
+        Err(_) => window_switcher::WindowPreview {
+            image: None,
+            error: Some("Preview unavailable".to_string()),
+            revision: 0,
+        },
+    }
+}
+
+const PREVIEW_POLL: Duration = Duration::from_millis(1500);
+
+fn preview_preload_loop(app: tauri::AppHandle) {
+    let mut previous = Vec::new();
+    let mut previous_foreground: Option<String> = None;
+    loop {
+        let Some(window) = app.get_webview_window("main") else {
+            thread::sleep(Duration::from_millis(200));
+            continue;
+        };
+        let Ok(own) = window.hwnd() else {
+            thread::sleep(Duration::from_millis(200));
+            continue;
+        };
+        if own.0.is_null() {
+            thread::sleep(Duration::from_millis(200));
+            continue;
+        }
+        window_switcher::set_own_hwnd(own);
+        let next = match window_switcher::list_windows(own) {
+            Ok(windows) => windows,
+            Err(_) => {
+                thread::sleep(PREVIEW_POLL);
+                continue;
+            }
+        };
+        let foreground = window_switcher::foreground_hwnd();
+        let dirty = window_switcher::dirty_windows(
+            &previous,
+            &next,
+            foreground.as_deref(),
+            previous_foreground.as_deref(),
+        );
+        capture_dirty(&app, &dirty);
+        window_switcher::prune_generations(&next);
+        previous = next;
+        previous_foreground = foreground;
+        thread::sleep(PREVIEW_POLL);
+    }
+}
+
+fn capture_dirty(app: &tauri::AppHandle, hwnds: &[String]) {
+    if hwnds.is_empty() {
+        return;
+    }
+    let pending = Mutex::new(hwnds.to_vec());
+    let workers = hwnds.len().min(2);
+    thread::scope(|scope| {
+        for _ in 0..workers {
+            let pending = &pending;
+            let app = app.clone();
+            scope.spawn(move || {
+                loop {
+                    let hwnd = {
+                        let mut pending = pending.lock().unwrap_or_else(|poison| poison.into_inner());
+                        pending.pop()
+                    };
+                    let Some(hwnd) = hwnd else {
+                        break;
+                    };
+                    let update = window_switcher::refresh_preview(&hwnd);
+                    let _ = app.emit("window-preview", update);
+                }
+            });
+        }
+    });
 }
 
 #[tauri::command]
@@ -472,6 +580,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             read_suggestion,
             open_action,
+            notify_hud_shown,
             read_scratchpad,
             write_scratchpad,
             read_layout,
@@ -490,7 +599,12 @@ pub fn run() {
         .setup(|app| {
             if let Some(window) = app.get_webview_window("main") {
                 fit_cursor_monitor(&window);
+                if let Ok(hwnd) = window.hwnd() {
+                    window_switcher::set_own_hwnd(hwnd);
+                }
             }
+            let preload = app.handle().clone();
+            thread::spawn(move || preview_preload_loop(preload));
             let handle = app.handle().clone();
             thread::spawn(move || listen_for_snapshots(handle));
 

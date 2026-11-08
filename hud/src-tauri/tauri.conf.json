@@ -25,9 +25,6 @@
         "shadow": false,
         "noRedirectionBitmap": true,
         "backgroundColor": "#00000000",
-        "windowEffects": {
-          "effects": ["acrylic"]
-        },
         "focus": false
       }
     ],

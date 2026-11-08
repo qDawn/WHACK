@@ -1,7 +1,25 @@
-import { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
+import { forwardRef, useEffect, useImperativeHandle, useLayoutEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { runningInTauri } from "../tauri";
+import {
+  cardRole,
+  commitSelection,
+  selectedPreviewImage,
+  selectionAfterHover,
+  selectionAfterShrink,
+  selectionFrame,
+} from "../windows/stackMotion";
+import {
+  dirtyWindows,
+  indexAfterPreviewLoad,
+} from "../windows/previewFreshness";
+import {
+  indexAfterDrag,
+  layoutStack,
+  pointerResolution,
+  type StackLayout,
+} from "../windows/stackLayout";
 
 type ListedWindow = {
   hwnd: string;
@@ -9,16 +27,19 @@ type ListedWindow = {
   title: string;
 };
 
+type WindowList = {
+  windows: ListedWindow[];
+  foregroundHwnd: string | null;
+};
+
 type WindowPreview = {
   image: string | null;
   error: string | null;
+  revision: number;
 };
 
-type PreviewState = {
+type PreviewUpdate = WindowPreview & {
   hwnd: string;
-  image: string | null;
-  pending: boolean;
-  error: string | null;
 };
 
 type Phase = "reading" | "ready" | "error";
@@ -34,11 +55,31 @@ export type WindowStackHandle = {
 const POLL_MS = 1500;
 const CLOSE_REFRESH_MS = 400;
 const WHEEL_THRESHOLD = 80;
+const DRAG_SLOP = 4;
+
+function sameWindows(left: ListedWindow[], right: ListedWindow[]): boolean {
+  if (left.length !== right.length) return false;
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index].hwnd !== right[index].hwnd || left[index].title !== right[index].title) return false;
+  }
+  return true;
+}
 
 function messageFrom(reason: unknown): string {
   if (reason instanceof Error && reason.message.trim()) return reason.message;
   if (typeof reason === "string" && reason.trim()) return reason;
   return "Could not read windows.";
+}
+
+/** Extra lead so a centred row can scroll back to cards that sit left of the viewport. */
+function scrollPad(layout: StackLayout, containerWidth: number): { pad: number; track: number } {
+  if (!layout.scroll || layout.cards.length === 0 || containerWidth <= 0) return { pad: 0, track: 0 };
+  const width = layout.cards[0].width;
+  const last = layout.cards.length - 1;
+  const translateMin = containerWidth / 2 - (last * layout.step + width / 2);
+  const pad = Math.max(0, -translateMin);
+  const translateMax = containerWidth / 2 - width / 2;
+  return { pad, track: layout.contentWidth + translateMax + pad };
 }
 
 function CloseIcon() {
@@ -62,64 +103,163 @@ const WindowStack = forwardRef<WindowStackHandle>(function WindowStack(props, re
   const focusInsideRef = useRef(false);
   const keyboardInsideRef = useRef(false);
   const pendingRef = useRef<ListedWindow[] | null>(null);
+  const pendingForegroundRef = useRef<string | null>(null);
   const pendingGenRef = useRef(0);
+  const snapshotRef = useRef<{ hwnd: string; title: string }[]>([]);
+  const foregroundSeenRef = useRef<string | null>(null);
+  const imagesRef = useRef<Record<string, string>>({});
+  const previewErrorsRef = useRef<Record<string, string>>({});
+  const revisionRef = useRef<Record<string, number>>({});
+  const inflightRef = useRef<Set<string>>(new Set());
+  const applyRef = useRef<(hwnd: string, result: WindowPreview) => void>(() => {});
   const appliedRef = useRef(0);
   const generationRef = useRef(0);
   const hasSuccessRef = useRef(false);
   const stepRef = useRef<(delta: number) => void>(() => {});
   const refreshRef = useRef<(force: boolean) => void>(() => {});
+  const layoutStepRef = useRef(1);
+  const suppressClickRef = useRef(false);
+  const dragRef = useRef<{ pointerId: number; startX: number; startIndex: number; scrubbed: boolean } | null>(null);
 
   const [phase, setPhase] = useState<Phase>(inApp ? "reading" : "error");
   const [windows, setWindows] = useState<ListedWindow[]>([]);
   const [index, setIndex] = useState(0);
+  const [hoverIndex, setHoverIndex] = useState<number | null>(null);
+  const [scrubbing, setScrubbing] = useState(false);
+  const [stripSize, setStripSize] = useState({ width: 0, height: 0 });
   const [listError, setListError] = useState<string | null>(
     inApp ? null : "Window list is available in the Aura window.",
   );
   const [cardErrors, setCardErrors] = useState<Record<string, string>>({});
-  const [preview, setPreview] = useState<PreviewState | null>(null);
-  const [previewArmed, setPreviewArmed] = useState(false);
+  const [previewErrors, setPreviewErrors] = useState<Record<string, string>>({});
+  const [images, setImages] = useState<Record<string, string>>({});
 
+  const frame = selectionFrame(windows, index);
   windowsRef.current = windows;
-  indexRef.current = index;
-  selectedRef.current = windows[index]?.hwnd ?? null;
+  indexRef.current = frame.index;
+  selectedRef.current = frame.previewHwnd;
+  imagesRef.current = images;
+  previewErrorsRef.current = previewErrors;
 
-  function commit(next: ListedWindow[], generation: number) {
+  const layout = layoutStack({
+    count: windows.length,
+    selectedIndex: frame.index,
+    containerWidth: stripSize.width,
+    containerHeight: stripSize.height,
+  });
+  layoutStepRef.current = layout.step > 1 ? layout.step : 1;
+  const scrolled = scrollPad(layout, stripSize.width);
+
+  function applyPreview(hwnd: string, result: WindowPreview) {
+    const kept = indexAfterPreviewLoad(indexRef.current, hwnd, selectedRef.current);
+    if (kept !== indexRef.current) {
+      indexRef.current = kept;
+      selectedRef.current = windowsRef.current[kept]?.hwnd ?? null;
+      setIndex(kept);
+    }
+    if (!result.image && !result.error) return;
+    const revision = Number.isFinite(result.revision) ? result.revision : 0;
+    const seen = revisionRef.current[hwnd] ?? -1;
+    if (revision < seen) return;
+    revisionRef.current[hwnd] = revision;
+    if (result.image) {
+      const image = result.image;
+      setImages((existing) => (existing[hwnd] === image ? existing : { ...existing, [hwnd]: image }));
+      setPreviewErrors((existing) => {
+        if (!existing[hwnd]) return existing;
+        const next = { ...existing };
+        delete next[hwnd];
+        return next;
+      });
+      return;
+    }
+    setImages((existing) => {
+      if (!existing[hwnd]) return existing;
+      const next = { ...existing };
+      delete next[hwnd];
+      return next;
+    });
+    const message = result.error && result.error.trim() ? result.error : "Preview unavailable";
+    setPreviewErrors((existing) => (existing[hwnd] === message ? existing : { ...existing, [hwnd]: message }));
+  }
+
+  applyRef.current = applyPreview;
+
+  function hydrate(items: ListedWindow[], dirty: readonly string[]) {
+    const dirtySet = new Set(dirty);
+    for (const item of items) {
+      const hwnd = item.hwnd;
+      const unresolved = !imagesRef.current[hwnd] && !previewErrorsRef.current[hwnd];
+      if (!unresolved && !dirtySet.has(hwnd)) continue;
+      if (inflightRef.current.has(hwnd)) continue;
+      inflightRef.current.add(hwnd);
+      invoke<WindowPreview>("capture_window", { hwnd, cacheOnly: true })
+        .then((result) => applyRef.current(hwnd, result))
+        .catch(() => {})
+        .finally(() => {
+          inflightRef.current.delete(hwnd);
+        });
+    }
+  }
+
+  function commit(next: ListedWindow[], foreground: string | null, generation: number) {
     if (generation < appliedRef.current) return;
     appliedRef.current = generation;
     const hwnd = selectedRef.current;
-    let resolved = 0;
-    if (next.length > 0) {
-      const found = hwnd ? next.findIndex((item) => item.hwnd === hwnd) : -1;
-      resolved = found >= 0 ? found : Math.min(indexRef.current, next.length - 1);
+    const found = hwnd ? next.findIndex((item) => item.hwnd === hwnd) : -1;
+    const resolved = found >= 0 ? found : selectionAfterShrink(indexRef.current, next.length).index;
+    const dirty = dirtyWindows(snapshotRef.current, next, foreground, foregroundSeenRef.current);
+    snapshotRef.current = next.map((item) => ({ hwnd: item.hwnd, title: item.title }));
+    foregroundSeenRef.current = foreground;
+    if (dirty.length > 0) {
+      const dirtySet = new Set(dirty);
+      setPreviewErrors((current) => {
+        let changed = false;
+        const cleared: Record<string, string> = {};
+        for (const [key, message] of Object.entries(current)) {
+          if (dirtySet.has(key)) {
+            changed = true;
+            continue;
+          }
+          cleared[key] = message;
+        }
+        return changed ? cleared : current;
+      });
     }
+    const listChanged = !sameWindows(windowsRef.current, next) || resolved !== indexRef.current;
     windowsRef.current = next;
     indexRef.current = resolved;
     selectedRef.current = next[resolved]?.hwnd ?? null;
     hasSuccessRef.current = true;
-    setWindows(next);
-    setIndex(resolved);
+    if (listChanged) {
+      setWindows(next);
+      setIndex(resolved);
+    }
     setPhase("ready");
     setListError(null);
+    hydrate(next, dirty);
   }
 
-  function applyList(next: ListedWindow[], generation: number, force: boolean) {
+  function applyList(next: ListedWindow[], foreground: string | null, generation: number, force: boolean) {
     if (holdRef.current && !force) {
       if (generation >= pendingGenRef.current) {
         pendingRef.current = next;
+        pendingForegroundRef.current = foreground;
         pendingGenRef.current = generation;
       }
       return;
     }
     pendingRef.current = null;
-    commit(next, generation);
+    commit(next, foreground, generation);
   }
 
   function releaseHold() {
     const pending = pendingRef.current;
     if (!pending) return;
     const generation = pendingGenRef.current;
+    const foreground = pendingForegroundRef.current;
     pendingRef.current = null;
-    commit(pending, generation);
+    commit(pending, foreground, generation);
   }
 
   function reportHold(pointerInside: boolean, focusInside: boolean) {
@@ -137,12 +277,10 @@ const WindowStack = forwardRef<WindowStackHandle>(function WindowStack(props, re
 
   function selectIndex(nextIndex: number) {
     const items = windowsRef.current;
-    const count = items.length;
-    const resolved = count === 0 ? 0 : Math.min(Math.max(nextIndex, 0), count - 1);
-    indexRef.current = resolved;
-    selectedRef.current = items[resolved]?.hwnd ?? null;
-    setPreviewArmed(true);
-    setIndex(resolved);
+    const committed = commitSelection(nextIndex, items.length);
+    indexRef.current = committed.index;
+    selectedRef.current = items[committed.index]?.hwnd ?? null;
+    setIndex(committed.index);
   }
 
   stepRef.current = (delta: number) => {
@@ -153,8 +291,8 @@ const WindowStack = forwardRef<WindowStackHandle>(function WindowStack(props, re
   async function load(force: boolean) {
     const generation = ++generationRef.current;
     try {
-      const listed = await invoke<ListedWindow[]>("list_windows");
-      applyList(listed, generation, force);
+      const listed = await invoke<WindowList>("list_windows");
+      applyList(listed.windows, listed.foregroundHwnd, generation, force);
     } catch (reason: unknown) {
       if (generation < appliedRef.current) return;
       setListError(messageFrom(reason));
@@ -173,7 +311,8 @@ const WindowStack = forwardRef<WindowStackHandle>(function WindowStack(props, re
     const onWheel = (event: WheelEvent) => {
       if (windowsRef.current.length === 0) return;
       event.preventDefault();
-      let delta = event.deltaY;
+      const dominant = Math.abs(event.deltaX) > Math.abs(event.deltaY) ? event.deltaX : event.deltaY;
+      let delta = dominant;
       if (event.deltaMode === WheelEvent.DOM_DELTA_LINE) delta *= 32;
       else if (event.deltaMode === WheelEvent.DOM_DELTA_PAGE) delta *= node.clientHeight || 120;
       accum += delta;
@@ -190,11 +329,33 @@ const WindowStack = forwardRef<WindowStackHandle>(function WindowStack(props, re
     return () => node.removeEventListener("wheel", onWheel);
   }, []);
 
+  useLayoutEffect(() => {
+    const node = cardsRef.current;
+    if (!node) return;
+    const measure = () => {
+      const width = node.clientWidth;
+      const height = node.clientHeight;
+      setStripSize((current) => (current.width === width && current.height === height ? current : { width, height }));
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(node);
+    return () => observer.disconnect();
+  }, [windows.length]);
+
+  useLayoutEffect(() => {
+    const node = cardsRef.current;
+    if (!node) return;
+    const lead = layout.scroll ? scrolled.pad : 0;
+    if (node.scrollLeft !== lead) node.scrollLeft = lead;
+  }, [index, layout.scroll, scrolled.pad]);
+
   useEffect(() => {
     if (!inApp) return;
     let alive = true;
     let timer = 0;
     let unlisten: (() => void) | undefined;
+    let unlistenVisibility: (() => void) | undefined;
 
     const stop = () => {
       window.clearInterval(timer);
@@ -205,8 +366,7 @@ const WindowStack = forwardRef<WindowStackHandle>(function WindowStack(props, re
       if (timer !== 0) return;
       timer = window.setInterval(() => refreshRef.current(false), POLL_MS);
     };
-    const hide = () => {
-      stop();
+    const releasePointer = () => {
       pointerInsideRef.current = false;
       focusInsideRef.current = false;
       keyboardInsideRef.current = false;
@@ -214,46 +374,38 @@ const WindowStack = forwardRef<WindowStackHandle>(function WindowStack(props, re
       releaseHold();
     };
 
-    listen<{ visible: boolean }>("hud-visibility", (event) => {
+    listen<PreviewUpdate>("window-preview", (event) => {
       if (!alive) return;
-      if (event.payload.visible) start();
-      else hide();
+      applyRef.current(event.payload.hwnd, event.payload);
     }).then((stopListening) => {
-      if (!alive) {
-        stopListening();
-        return;
-      }
-      unlisten = stopListening;
-      if (document.documentElement.dataset.hudVisible === "true") start();
+      if (!alive) stopListening();
+      else unlisten = stopListening;
     });
 
-    const kick = window.setTimeout(() => {
+    listen<{ visible: boolean }>("hud-visibility", (event) => {
       if (!alive) return;
-      if (document.documentElement.dataset.hudVisible === "true") start();
-    }, 0);
+      if (event.payload.visible) refreshRef.current(false);
+      else releasePointer();
+    }).then((stopListening) => {
+      if (!alive) stopListening();
+      else unlistenVisibility = stopListening;
+    });
+
+    start();
 
     return () => {
       alive = false;
-      window.clearTimeout(kick);
       stop();
       unlisten?.();
+      unlistenVisibility?.();
     };
   }, [inApp]);
 
   useEffect(() => {
-    const container = cardsRef.current;
-    const card = container?.querySelector<HTMLElement>(`[data-index="${index}"]`);
-    if (!container || !card) return;
-    const containerRect = container.getBoundingClientRect();
-    const cardRect = card.getBoundingClientRect();
-    if (cardRect.top < containerRect.top) {
-      container.scrollTop -= containerRect.top - cardRect.top;
-    } else if (cardRect.bottom > containerRect.bottom) {
-      container.scrollTop += cardRect.bottom - containerRect.bottom;
+    const live = new Set(windows.map((item) => item.hwnd));
+    for (const hwnd of Object.keys(revisionRef.current)) {
+      if (!live.has(hwnd)) delete revisionRef.current[hwnd];
     }
-  }, [index, windows]);
-
-  useEffect(() => {
     setCardErrors((current) => {
       const next: Record<string, string> = {};
       for (const item of windows) {
@@ -262,36 +414,52 @@ const WindowStack = forwardRef<WindowStackHandle>(function WindowStack(props, re
       }
       return Object.keys(current).length === Object.keys(next).length ? current : next;
     });
+    setPreviewErrors((current) => {
+      let changed = false;
+      const next: Record<string, string> = {};
+      for (const [hwnd, message] of Object.entries(current)) {
+        if (!live.has(hwnd)) {
+          changed = true;
+          continue;
+        }
+        next[hwnd] = message;
+      }
+      return changed ? next : current;
+    });
+    setImages((current) => {
+      let changed = false;
+      const next: Record<string, string> = {};
+      for (const [hwnd, image] of Object.entries(current)) {
+        if (!live.has(hwnd)) {
+          changed = true;
+          continue;
+        }
+        next[hwnd] = image;
+      }
+      return changed ? next : current;
+    });
+    setHoverIndex((current) => (current !== null && current < windows.length ? current : null));
   }, [windows]);
 
-  const current = windows[index] ?? null;
+  const previewHwnd = frame.previewHwnd;
+  const current = previewHwnd ? (windows[frame.index] ?? null) : null;
 
   useEffect(() => {
-    if (!current || !inApp || !previewArmed) {
-      setPreview(null);
-      return;
-    }
-    let alive = true;
+    if (!current || !inApp) return;
     const hwnd = current.hwnd;
-    setPreview({ hwnd, image: null, pending: true, error: null });
     invoke<WindowPreview>("capture_window", { hwnd })
       .then((result) => {
-        if (!alive) return;
-        setPreview({
-          hwnd,
-          image: result.image,
-          pending: false,
-          error: result.error,
-        });
+        applyRef.current(hwnd, result);
       })
       .catch((reason: unknown) => {
-        if (!alive) return;
-        setPreview({ hwnd, image: null, pending: false, error: messageFrom(reason) });
+        if (imagesRef.current[hwnd]) return;
+        applyRef.current(hwnd, {
+          image: null,
+          error: messageFrom(reason),
+          revision: revisionRef.current[hwnd] ?? 0,
+        });
       });
-    return () => {
-      alive = false;
-    };
-  }, [current?.hwnd, current?.title, inApp, previewArmed]);
+  }, [current?.hwnd, current?.title, inApp]);
 
   function clearCardError(hwnd: string) {
     setCardErrors((existing) => {
@@ -321,6 +489,43 @@ const WindowStack = forwardRef<WindowStackHandle>(function WindowStack(props, re
     }
   }
 
+  function endDrag(event: React.PointerEvent<HTMLDivElement>) {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    if (drag.scrubbed) suppressClickRef.current = true;
+    dragRef.current = null;
+    setScrubbing(false);
+  }
+
+  function onStripPointerDown(event: React.PointerEvent<HTMLDivElement>) {
+    if (event.button !== 0) return;
+    suppressClickRef.current = false;
+    const target = event.target;
+    if (target instanceof Element && target.closest(".window-card__close")) return;
+    event.stopPropagation();
+    dragRef.current = {
+      pointerId: event.pointerId,
+      startX: event.clientX,
+      startIndex: indexRef.current,
+      scrubbed: false,
+    };
+    event.currentTarget.setPointerCapture(event.pointerId);
+  }
+
+  function onStripPointerMove(event: React.PointerEvent<HTMLDivElement>) {
+    const drag = dragRef.current;
+    if (!drag || drag.pointerId !== event.pointerId) return;
+    const dx = event.clientX - drag.startX;
+    if (!drag.scrubbed) {
+      if (Math.abs(dx) < DRAG_SLOP) return;
+      drag.scrubbed = true;
+      setScrubbing(true);
+    }
+    const next = indexAfterDrag(drag.startIndex, dx, layoutStepRef.current, windowsRef.current.length);
+    const decision = pointerResolution("scrub", drag.startIndex, next);
+    if (decision.selectedIndex !== indexRef.current) selectIndex(decision.selectedIndex);
+  }
+
   useImperativeHandle(
     ref,
     () => ({
@@ -336,7 +541,8 @@ const WindowStack = forwardRef<WindowStackHandle>(function WindowStack(props, re
     [windows],
   );
 
-  const shot = preview && current && preview.hwnd === current.hwnd ? preview : null;
+  const selectedImage = selectedPreviewImage(images, previewHwnd);
+  const selectedPreviewError = previewHwnd ? (previewErrors[previewHwnd] ?? null) : null;
   const showReading = phase === "reading" && windows.length === 0 && !listError;
   const showEmpty = phase === "ready" && windows.length === 0 && !listError;
 
@@ -362,48 +568,99 @@ const WindowStack = forwardRef<WindowStackHandle>(function WindowStack(props, re
       {listError ? <p className="window-stack__status window-stack__status--error error">{listError}</p> : null}
       {showReading ? <p className="window-stack__status">Reading windows…</p> : null}
       {showEmpty ? <p className="window-stack__status">No other windows are open.</p> : null}
-      {current ? (
+      {current && previewHwnd === current.hwnd ? (
         <div className="window-stack__preview glass-panel" data-no-drag>
-          {shot?.image ? (
-            <img src={shot.image} alt="" />
-          ) : shot ? (
-            <p className="window-stack__preview-note" title={shot.error ?? undefined}>
-              {shot.pending ? "Reading preview…" : "Preview unavailable"}
+          {selectedImage ? (
+            <img src={selectedImage} alt="" />
+          ) : (
+            <p className="window-stack__preview-note" title={selectedPreviewError ?? undefined}>
+              {selectedPreviewError ? "Preview unavailable" : "Reading preview…"}
             </p>
-          ) : null}
-          <p className="window-stack__preview-title">{current.title}</p>
+          )}
+          <p className="window-stack__preview-title">{frame.title}</p>
         </div>
       ) : null}
       {windows.length > 0 ? (
-        <div className="window-stack__cards" data-no-drag ref={cardsRef}>
+        <div
+          className="window-stack__cards"
+          data-no-drag
+          data-scroll={layout.scroll ? "true" : "false"}
+          data-scrubbing={scrubbing ? "true" : "false"}
+          ref={cardsRef}
+          onPointerDown={onStripPointerDown}
+          onPointerMove={onStripPointerMove}
+          onPointerUp={endDrag}
+          onPointerCancel={endDrag}
+        >
+          {layout.scroll ? <div className="window-stack__sizer" style={{ width: scrolled.track }} /> : null}
           {windows.map((item, cardIndex) => {
-            const active = cardIndex === index;
+            const card = layout.cards[cardIndex];
+            const role = cardRole(cardIndex, frame.index, hoverIndex);
             const cardError = cardErrors[item.hwnd];
+            const cardImage = images[item.hwnd] ?? null;
+            const cardPreviewError = previewErrors[item.hwnd] ?? null;
+            const placed = card ?? { x: 0, y: 0, width: 0, height: 0, z: cardIndex + 1, scale: 1 };
             return (
               <div
                 key={item.hwnd}
                 className="window-card"
-                style={{ zIndex: cardIndex + 1 }}
+                style={{
+                  width: placed.width,
+                  height: placed.height,
+                  zIndex: placed.z,
+                  transform: `translate3d(${placed.x + layout.translateX + scrolled.pad}px, ${placed.y}px, 0) scale(${placed.scale})`,
+                }}
                 data-hwnd={item.hwnd}
                 data-index={cardIndex}
-                data-active={active ? "true" : "false"}
+                data-active={role === "selected" ? "true" : "false"}
+                data-hover={role === "hovered" ? "true" : "false"}
+                data-side={cardIndex < frame.index ? "left" : "right"}
                 data-no-drag
                 role="button"
                 tabIndex={0}
+                aria-selected={role === "selected"}
+                onPointerEnter={() => {
+                  const kept = selectionAfterHover(indexRef.current, cardIndex, windowsRef.current.length);
+                  if (kept.index !== indexRef.current) selectIndex(kept.index);
+                  setHoverIndex(cardIndex);
+                }}
+                onPointerLeave={() => {
+                  setHoverIndex((existing) => (existing === cardIndex ? null : existing));
+                }}
                 onClick={(event) => {
+                  if (suppressClickRef.current) {
+                    suppressClickRef.current = false;
+                    event.preventDefault();
+                    event.stopPropagation();
+                    return;
+                  }
                   const target = event.target;
                   if (target instanceof Element && target.closest(".window-card__close")) return;
-                  void activateWindow(item.hwnd);
+                  const decision = pointerResolution("click", indexRef.current, cardIndex);
+                  selectIndex(decision.selectedIndex);
+                  if (!decision.activate) return;
+                  const hwnd = windowsRef.current[decision.selectedIndex]?.hwnd;
+                  if (hwnd) void activateWindow(hwnd);
                 }}
                 onKeyDown={(event) => {
                   if (event.key !== "Enter" && event.key !== " ") return;
+                  if (event.target instanceof Element && event.target.closest(".window-card__close")) return;
                   event.preventDefault();
                   event.stopPropagation();
-                  void activateWindow(item.hwnd);
+                  const decision = pointerResolution("click", indexRef.current, cardIndex);
+                  selectIndex(decision.selectedIndex);
+                  if (!decision.activate) return;
+                  const hwnd = windowsRef.current[decision.selectedIndex]?.hwnd;
+                  if (hwnd) void activateWindow(hwnd);
                 }}
-                onPointerEnter={() => selectIndex(cardIndex)}
-                onFocus={() => selectIndex(cardIndex)}
               >
+                {cardImage ? (
+                  <img className="window-card__shot" src={cardImage} alt="" />
+                ) : (
+                  <span className="window-card__placeholder" data-state={cardPreviewError ? "unavailable" : "loading"} aria-hidden="true">
+                    {cardPreviewError ? "Preview unavailable" : null}
+                  </span>
+                )}
                 <span className="window-card__title">{item.title}</span>
                 {cardError ? <span className="window-card__error error">{cardError}</span> : null}
                 <button
@@ -417,6 +674,10 @@ const WindowStack = forwardRef<WindowStackHandle>(function WindowStack(props, re
                   onClick={(event) => {
                     event.preventDefault();
                     event.stopPropagation();
+                    if (suppressClickRef.current) {
+                      suppressClickRef.current = false;
+                      return;
+                    }
                     void closeWindow(item.hwnd);
                   }}
                 >

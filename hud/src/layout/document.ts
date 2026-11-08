@@ -1,8 +1,9 @@
-import { clamp, clampStagePoint, type StageSize } from "./geometry";
+import { clamp, clampStagePoint, GRID_PX, type StageSize } from "./geometry";
 import {
   isPanelId,
   LAYOUT_VERSION,
   type LayoutDocument,
+  type NavPlacement,
   type NotePlacement,
   type Placement,
   type Visibility,
@@ -48,6 +49,24 @@ function placement(value: unknown): Placement | null {
   return { x, y, z, visibility: shown };
 }
 
+/** New files store `visible`. Older files stored `visibility` on the nav panel. */
+function navVisible(value: Record<string, unknown>): boolean | null {
+  if (typeof value.visible === "boolean") return value.visible;
+  if (value.visibility === "visible") return true;
+  if (value.visibility === "minimised" || value.visibility === "hidden") return false;
+  return null;
+}
+
+function navPlacement(value: unknown): NavPlacement | null {
+  if (!isRecord(value)) return null;
+  const x = fraction(value.x);
+  const y = fraction(value.y);
+  const z = order(value.z);
+  const visible = navVisible(value);
+  if (x === null || y === null || z === null || visible === null) return null;
+  return { x, y, z, visible };
+}
+
 function notePlacement(value: unknown): NotePlacement | null {
   const base = placement(value);
   if (!base || !isRecord(value)) return null;
@@ -83,12 +102,16 @@ function widgetInstance(value: unknown): WidgetInstance | null {
 
 function widgets(value: unknown): WidgetInstance[] | null {
   if (!Array.isArray(value)) return null;
-  const seen = new Set<string>();
+  const seenIds = new Set<string>();
+  const seenTypes = new Set<string>();
   const next: WidgetInstance[] = [];
   for (const item of value) {
     const widget = widgetInstance(item);
-    if (!widget || seen.has(widget.type)) continue;
-    seen.add(widget.type);
+    if (!widget || seenIds.has(widget.id)) continue;
+    const multiple = widgetByType(widget.type)?.allowMultiple === true;
+    if (!multiple && seenTypes.has(widget.type)) continue;
+    seenIds.add(widget.id);
+    if (!multiple) seenTypes.add(widget.type);
     next.push(widget);
   }
   return next;
@@ -107,7 +130,7 @@ export function parseLayout(raw: string): ParsedLayout | null {
   const pinned = shortcuts(value.shortcuts);
   const instances = widgets(value.widgets);
   if (!pinned || !instances || !isRecord(value.panels)) return null;
-  const nav = placement(value.panels.nav);
+  const nav = navPlacement(value.panels.nav);
   const stack = placement(value.panels["window-stack"]);
   const suggestions = placement(value.panels.suggestions);
   const note = notePlacement(value.panels["quick-note"]);
@@ -149,6 +172,15 @@ function writePlacement(panel: Placement): Placement {
   };
 }
 
+function writeNav(panel: NavPlacement): NavPlacement {
+  return {
+    x: roundFraction(panel.x),
+    y: roundFraction(panel.y),
+    z: panel.z,
+    visible: panel.visible,
+  };
+}
+
 function writeNote(panel: NotePlacement): NotePlacement {
   return {
     ...writePlacement(panel),
@@ -172,7 +204,7 @@ export function serializeLayout(layout: LayoutDocument, extras: Record<string, u
         ...writePlacement(widget),
       })),
       panels: {
-        nav: writePlacement(layout.panels.nav),
+        nav: writeNav(layout.panels.nav),
         "window-stack": writePlacement(layout.panels["window-stack"]),
         suggestions: writePlacement(layout.panels.suggestions),
         "quick-note": writeNote(layout.panels["quick-note"]),
@@ -187,8 +219,9 @@ export function serializeLayout(layout: LayoutDocument, extras: Record<string, u
 type Counted = { visibility: Visibility };
 
 function others(layout: LayoutDocument): Counted[] {
+  const nav: Counted = { visibility: layout.panels.nav.visible ? "visible" : "hidden" };
   return [
-    layout.panels.nav,
+    nav,
     layout.panels["window-stack"],
     layout.panels.suggestions,
     ...layout.widgets.filter((widget) => widgetByType(widget.type)),
@@ -275,10 +308,21 @@ function setZ(layout: LayoutDocument, id: string, z: number): LayoutDocument {
   };
 }
 
+function withNavVisible(layout: LayoutDocument, visible: boolean): LayoutDocument {
+  if (layout.panels.nav.visible === visible) return layout;
+  return {
+    ...layout,
+    panels: { ...layout.panels, nav: { ...layout.panels.nav, visible } },
+  };
+}
+
+/** Sidebar show/hide. Position, z-order, and shortcut pins stay put. */
+export function setNavVisible(layout: LayoutDocument, visible: boolean): LayoutDocument {
+  return enforceNoteCompany(withNavVisible(layout, visible));
+}
+
 function withVisibility(layout: LayoutDocument, id: string, shown: Visibility): LayoutDocument {
-  if (id === "nav") {
-    return { ...layout, panels: { ...layout.panels, nav: { ...layout.panels.nav, visibility: shown } } };
-  }
+  if (id === "nav") return withNavVisible(layout, shown === "visible");
   if (id === "window-stack") {
     return {
       ...layout,
@@ -368,20 +412,84 @@ export function reorderShortcut(layout: LayoutDocument, sourceId: string, target
   return { ...layout, shortcuts: next };
 }
 
-export function insertWidget(layout: LayoutDocument, type: string, variant: string, stage: StageSize): LayoutDocument | null {
+function nextWidgetId(type: string, layout: LayoutDocument, reservedIds: readonly string[]): string {
   const registration = widgetByType(type);
-  if (!registration || isPanelId(type)) return null;
-  if (layout.widgets.some((widget) => widget.type === type)) return null;
-  const size = registration.sizes.find((item) => item.id === variant) ?? registration.sizes[0];
+  if (!registration?.allowMultiple) return type;
+  const used = new Set<string>([...layout.widgets.map((widget) => widget.id), ...reservedIds]);
+  let n = 1;
+  let id = `${type}-${n}`;
+  while (used.has(id) || isPanelId(id)) {
+    n += 1;
+    id = `${type}-${n}`;
+  }
+  return id;
+}
+
+/** Centered on the stage, then stepped by one grid cell per instance of this type already placed. */
+function widgetOrigin(stage: StageSize, width: number, height: number, prior: number): { x: number; y: number } {
+  const offset = prior * GRID_PX;
+  const stageWidth = Math.max(stage.width, 1);
+  const stageHeight = Math.max(stage.height, 1);
+  return {
+    x: clamp(((stageWidth - width) / 2 + offset) / stageWidth, 0, 1),
+    y: clamp(((stageHeight - height) / 2 + offset) / stageHeight, 0, 1),
+  };
+}
+
+/**
+ * Place a known instance id. A new widget and a restored one share this offset
+ * so a restored instance is not forced to 0,0. Overlap is allowed.
+ */
+export function placeWidgetInstance(
+  layout: LayoutDocument,
+  id: string,
+  type: string,
+  variant: string,
+  stage: StageSize,
+): LayoutDocument | null {
+  const registration = widgetByType(type);
+  if (!registration || id.length === 0 || isPanelId(type) || isPanelId(id)) return null;
+  if (layout.widgets.some((widget) => widget.id === id)) return null;
+  if (!registration.allowMultiple && layout.widgets.some((widget) => widget.type === type)) return null;
+  const known = registration.sizes.find((item) => item.id === variant);
+  const size = known ?? registration.sizes[0];
   if (!size) return null;
+  const prior = layout.widgets.filter((widget) => widget.type === type).length;
+  const origin = widgetOrigin(stage, size.width, size.height, prior);
   const instance: WidgetInstance = {
-    id: type,
+    id,
     type,
-    variant: size.id,
-    x: clamp((stage.width - size.width) / 2 / Math.max(stage.width, 1), 0, 1),
-    y: clamp((stage.height - size.height) / 2 / Math.max(stage.height, 1), 0, 1),
+    variant: variant.length > 0 ? variant : size.id,
+    x: origin.x,
+    y: origin.y,
     z: highestZ(layout) + 1,
     visibility: "visible",
   };
   return enforceNoteCompany({ ...layout, widgets: [...layout.widgets, instance] });
+}
+
+export function insertWidget(
+  layout: LayoutDocument,
+  type: string,
+  variant: string,
+  stage: StageSize,
+  reservedIds: readonly string[] = [],
+): LayoutDocument | null {
+  const registration = widgetByType(type);
+  if (!registration || isPanelId(type)) return null;
+  if (!registration.allowMultiple && layout.widgets.some((widget) => widget.type === type)) return null;
+  const size = registration.sizes.find((item) => item.id === variant) ?? registration.sizes[0];
+  if (!size) return null;
+  return placeWidgetInstance(layout, nextWidgetId(type, layout, reservedIds), type, size.id, stage);
+}
+
+export function setWidgetVariant(layout: LayoutDocument, id: string, variant: string): LayoutDocument {
+  const widget = layout.widgets.find((item) => item.id === id);
+  if (!widget || widget.variant === variant) return layout;
+  const registration = widgetByType(widget.type);
+  if (!registration?.sizes.some((size) => size.id === variant)) return layout;
+  return {
+    ...layout,
+    widgets: layout.widgets.map((item) => (item.id === id ? { ...item, variant } : item)),
+  };
 }

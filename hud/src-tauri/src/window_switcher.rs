@@ -5,9 +5,13 @@
 //! Chrome often come back black. DWM live thumbnails are not used.
 //! One card is one top-level window. Tab strips are not scraped.
 //! Exclusive fullscreen games cannot be covered. Aura does not inject into them.
+//!
+//! The preview cache is filled by a background pass that starts with the process.
+//! A later `capture_window` for the same hwnd and title returns that JPEG.
+//! Only a new hwnd, a title change, or a new foreground window grabs another frame.
 
-use std::collections::VecDeque;
-use std::sync::Mutex;
+use std::collections::{HashMap, HashSet, VecDeque};
+use std::sync::{Condvar, LazyLock, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -49,7 +53,8 @@ use windows::core::{Error, Interface, PWSTR};
 use windows::Win32::Graphics::Dxgi::IDXGIDevice;
 use windows::Win32::Foundation::HMODULE;
 
-const PREVIEW_CACHE_LIMIT: usize = 20;
+const PREVIEW_CACHE_LIMIT: usize = 40;
+const CAPTURE_SLOTS: usize = 2;
 const PREVIEW_LONG_EDGE: u32 = 480;
 const PREVIEW_TIMEOUT: Duration = Duration::from_millis(900);
 const MAX_PREVIEW_PIXELS: usize = 16_000_000;
@@ -67,6 +72,23 @@ pub struct ListedWindow {
 pub struct WindowPreview {
     pub image: Option<String>,
     pub error: Option<String>,
+    /// Increases when a preview is invalidated. Older replies must not replace a newer frame.
+    pub revision: u64,
+}
+
+#[derive(Clone, serde::Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct WindowList {
+    pub windows: Vec<ListedWindow>,
+    pub foreground_hwnd: Option<String>,
+}
+
+#[derive(Clone, serde::Serialize)]
+pub struct PreviewUpdate {
+    pub hwnd: String,
+    pub image: Option<String>,
+    pub error: Option<String>,
+    pub revision: u64,
 }
 
 struct CollectedWindow {
@@ -80,7 +102,9 @@ struct CollectedWindow {
 struct CachedPreview {
     hwnd: String,
     title: String,
-    data_url: String,
+    image: Option<String>,
+    error: Option<String>,
+    revision: u64,
 }
 
 struct Gpu {
@@ -95,7 +119,12 @@ struct PreviewCache {
 static PREVIEW_CACHE: Mutex<PreviewCache> = Mutex::new(PreviewCache {
     entries: VecDeque::new(),
 });
+static PREVIEW_GENERATION: LazyLock<Mutex<HashMap<String, u64>>> = LazyLock::new(|| Mutex::new(HashMap::new()));
+static OWN_HWND: Mutex<Option<isize>> = Mutex::new(None);
 static GPU: Mutex<Option<Gpu>> = Mutex::new(None);
+static CONTEXT: Mutex<()> = Mutex::new(());
+static CAPTURE_GATE: Mutex<usize> = Mutex::new(0);
+static CAPTURE_GATE_CV: Condvar = Condvar::new();
 
 pub fn parse_hwnd(value: &str) -> Result<HWND, String> {
     let bits: u64 = value
@@ -191,11 +220,90 @@ pub fn close_window(hwnd_text: &str) -> Result<(), String> {
     }
 }
 
-pub fn capture_window(hwnd_text: &str) -> WindowPreview {
+pub fn set_own_hwnd(hwnd: HWND) {
+    if hwnd.0.is_null() {
+        return;
+    }
+    *lock_own() = Some(hwnd.0 as isize);
+}
+
+pub fn foreground_hwnd() -> Option<String> {
+    let hwnd = unsafe { GetForegroundWindow() };
+    if hwnd.0.is_null() {
+        None
+    } else {
+        Some(hwnd_to_string(hwnd))
+    }
+}
+
+/// Hwnds that need a new capture between two listings.
+///
+/// A hwnd is dirty when it is new or its title changed. The foreground hwnd is
+/// dirty only when it changed and it is still in `next`. Missing hwnds are not
+/// captured. The same lists and the same foreground return an empty set.
+pub fn dirty_windows(
+    previous: &[ListedWindow],
+    next: &[ListedWindow],
+    foreground_hwnd: Option<&str>,
+    previous_foreground: Option<&str>,
+) -> Vec<String> {
+    let mut prior: HashMap<&str, &str> = HashMap::new();
+    for window in previous {
+        prior.entry(window.hwnd.as_str()).or_insert(window.title.as_str());
+    }
+
+    let mut dirty = Vec::new();
+    let mut seen = HashSet::new();
+    for window in next {
+        let changed = match prior.get(window.hwnd.as_str()) {
+            None => true,
+            Some(title) => *title != window.title.as_str(),
+        };
+        if changed && seen.insert(window.hwnd.clone()) {
+            dirty.push(window.hwnd.clone());
+        }
+    }
+
+    if foreground_hwnd != previous_foreground {
+        if let Some(hwnd) = foreground_hwnd {
+            if next.iter().any(|window| window.hwnd == hwnd) && seen.insert(hwnd.to_string()) {
+                dirty.push(hwnd.to_string());
+            }
+        }
+    }
+    dirty
+}
+
+pub fn prune_generations(live: &[ListedWindow]) {
+    let keep: HashSet<&str> = live.iter().map(|window| window.hwnd.as_str()).collect();
+    lock_generations().retain(|hwnd, _| keep.contains(hwnd.as_str()));
+}
+
+/// Drop any cached frame and grab again. Used when a window becomes foreground
+/// or its title changes, including after a sticky capture failure.
+pub fn refresh_preview(hwnd_text: &str) -> PreviewUpdate {
+    let hwnd_key = parse_hwnd(hwnd_text).ok().map(|hwnd| hwnd_to_string(hwnd));
+    if let Some(key) = &hwnd_key {
+        bump_generation(key);
+        forget_preview(key);
+    }
+    let preview = capture_window(hwnd_text, false);
+    PreviewUpdate {
+        hwnd: hwnd_key.unwrap_or_else(|| hwnd_text.to_string()),
+        image: preview.image,
+        error: preview.error,
+        revision: preview.revision,
+    }
+}
+
+pub fn capture_window(hwnd_text: &str, cache_only: bool) -> WindowPreview {
     let hwnd = match parse_hwnd(hwnd_text) {
         Ok(hwnd) => hwnd,
         Err(error) => return preview_error(error),
     };
+    if is_own_hwnd(hwnd) {
+        return preview_error("Preview unavailable".to_string());
+    }
     if unsafe { !IsWindow(Some(hwnd)).as_bool() } {
         return preview_error("That window is no longer open.".to_string());
     }
@@ -203,26 +311,60 @@ pub fn capture_window(hwnd_text: &str) -> WindowPreview {
     let key = hwnd_to_string(hwnd);
     let title = window_title(hwnd);
     if let Some(hit) = cached_preview(&key, &title) {
+        return hit;
+    }
+    if cache_only {
         return WindowPreview {
-            image: Some(hit),
+            image: None,
             error: None,
+            revision: 0,
+        };
+    }
+
+    let revision = generation(&key);
+    let _slot = acquire_slot();
+    if window_title(hwnd) == title {
+        if let Some(hit) = cached_preview(&key, &title) {
+            return hit;
+        }
+    }
+    if generation(&key) != revision {
+        let title_now = window_title(hwnd);
+        if let Some(hit) = cached_preview(&key, &title_now) {
+            return hit;
+        }
+        return WindowPreview {
+            image: None,
+            error: None,
+            revision: generation(&key),
         };
     }
 
     match grab_jpeg(hwnd) {
         Ok(data_url) => {
             let title_now = window_title(hwnd);
-            if title_now == title {
-                remember_preview(key, title, data_url.clone());
-            } else {
-                forget_preview(&key);
+            let current = generation(&key);
+            if title_now == title && current == revision {
+                remember_preview(key, title, Some(data_url.clone()), None, revision);
             }
             WindowPreview {
                 image: Some(data_url),
                 error: None,
+                revision,
             }
         }
-        Err(error) => preview_error(error),
+        Err(error) => {
+            let title_now = window_title(hwnd);
+            let current = generation(&key);
+            if title_now == title && current == revision {
+                remember_preview(key, title, None, Some(error.clone()), revision);
+            }
+            WindowPreview {
+                image: None,
+                error: Some(error),
+                revision,
+            }
+        }
     }
 }
 
@@ -351,7 +493,7 @@ fn attach_and_foreground(hwnd: HWND) -> Result<(), String> {
     }
 }
 
-fn cached_preview(hwnd: &str, title: &str) -> Option<String> {
+fn cached_preview(hwnd: &str, title: &str) -> Option<WindowPreview> {
     let mut cache = lock_cache();
     let stale = cache
         .entries
@@ -365,13 +507,23 @@ fn cached_preview(hwnd: &str, title: &str) -> Option<String> {
         .entries
         .iter()
         .find(|entry| entry.hwnd == hwnd && entry.title == title)
-        .map(|entry| entry.data_url.clone())
+        .map(|entry| WindowPreview {
+            image: entry.image.clone(),
+            error: entry.error.clone(),
+            revision: entry.revision,
+        })
 }
 
-fn remember_preview(hwnd: String, title: String, data_url: String) {
+fn remember_preview(hwnd: String, title: String, image: Option<String>, error: Option<String>, revision: u64) {
     let mut cache = lock_cache();
     cache.entries.retain(|entry| entry.hwnd != hwnd);
-    cache.entries.push_back(CachedPreview { hwnd, title, data_url });
+    cache.entries.push_back(CachedPreview {
+        hwnd,
+        title,
+        image,
+        error,
+        revision,
+    });
     while cache.entries.len() > PREVIEW_CACHE_LIMIT {
         cache.entries.pop_front();
     }
@@ -385,14 +537,67 @@ fn lock_cache() -> std::sync::MutexGuard<'static, PreviewCache> {
     PREVIEW_CACHE.lock().unwrap_or_else(|poison| poison.into_inner())
 }
 
+fn lock_generations() -> std::sync::MutexGuard<'static, HashMap<String, u64>> {
+    PREVIEW_GENERATION
+        .lock()
+        .unwrap_or_else(|poison| poison.into_inner())
+}
+
+fn lock_own() -> std::sync::MutexGuard<'static, Option<isize>> {
+    OWN_HWND.lock().unwrap_or_else(|poison| poison.into_inner())
+}
+
+fn generation(hwnd: &str) -> u64 {
+    lock_generations().get(hwnd).copied().unwrap_or(0)
+}
+
+fn bump_generation(hwnd: &str) -> u64 {
+    let mut generations = lock_generations();
+    let entry = generations.entry(hwnd.to_string()).or_insert(0);
+    *entry = entry.wrapping_add(1);
+    *entry
+}
+
+fn is_own_hwnd(hwnd: HWND) -> bool {
+    lock_own().is_some_and(|own| own == hwnd.0 as isize)
+}
+
+struct CaptureSlot;
+
+impl Drop for CaptureSlot {
+    fn drop(&mut self) {
+        let mut inflight = CAPTURE_GATE.lock().unwrap_or_else(|poison| poison.into_inner());
+        *inflight = inflight.saturating_sub(1);
+        CAPTURE_GATE_CV.notify_one();
+    }
+}
+
+fn acquire_slot() -> CaptureSlot {
+    let mut inflight = CAPTURE_GATE.lock().unwrap_or_else(|poison| poison.into_inner());
+    while *inflight >= CAPTURE_SLOTS {
+        inflight = CAPTURE_GATE_CV
+            .wait(inflight)
+            .unwrap_or_else(|poison| poison.into_inner());
+    }
+    *inflight += 1;
+    CaptureSlot
+}
+
 fn preview_error(error: String) -> WindowPreview {
     WindowPreview {
         image: None,
         error: Some(error),
+        revision: 0,
     }
 }
 
 fn grab_jpeg(hwnd: HWND) -> Result<String, String> {
+    let (device, context) = clone_gpu()?;
+    let rgb = grab_frame(&device, &context, hwnd)?;
+    encode_jpeg(rgb)
+}
+
+fn clone_gpu() -> Result<(ID3D11Device, ID3D11DeviceContext), String> {
     let mut gpu_slot = GPU.lock().unwrap_or_else(|poison| poison.into_inner());
     if gpu_slot
         .as_ref()
@@ -404,8 +609,7 @@ fn grab_jpeg(hwnd: HWND) -> Result<String, String> {
         *gpu_slot = Some(create_gpu()?);
     }
     let gpu = gpu_slot.as_ref().expect("graphics device");
-    let rgb = grab_frame(gpu, hwnd)?;
-    encode_jpeg(rgb)
+    Ok((gpu.device.clone(), gpu.context.clone()))
 }
 
 fn create_gpu() -> Result<Gpu, String> {
@@ -437,7 +641,7 @@ fn create_device(driver: windows::Win32::Graphics::Direct3D::D3D_DRIVER_TYPE) ->
     }
 }
 
-fn grab_frame(gpu: &Gpu, hwnd: HWND) -> Result<image::RgbImage, String> {
+fn grab_frame(device: &ID3D11Device, context: &ID3D11DeviceContext, hwnd: HWND) -> Result<image::RgbImage, String> {
     unsafe {
         let _ = RoInitialize(RO_INIT_MULTITHREADED);
     }
@@ -453,7 +657,7 @@ fn grab_frame(gpu: &Gpu, hwnd: HWND) -> Result<image::RgbImage, String> {
         return Err("That window has no visible area to preview.".to_string());
     }
 
-    let direct = direct3d_device(&gpu.device)?;
+    let direct = direct3d_device(device)?;
     let pool = Direct3D11CaptureFramePool::CreateFreeThreaded(
         &direct,
         DirectXPixelFormat::B8G8R8A8UIntNormalized,
@@ -489,7 +693,12 @@ fn grab_frame(gpu: &Gpu, hwnd: HWND) -> Result<image::RgbImage, String> {
         thread::sleep(Duration::from_millis(15));
     };
 
-    let read = read_frame(&gpu.device, &gpu.context, &frame);
+    let read = {
+        // The immediate context is not thread-safe. The frame wait above stays
+        // outside this lock so two captures can be in flight.
+        let _context = CONTEXT.lock().unwrap_or_else(|poison| poison.into_inner());
+        read_frame(device, context, &frame)
+    };
     let _ = frame.Close();
     let _ = session.Close();
     let _ = pool.Close();
@@ -642,4 +851,73 @@ fn win_err(error: Error) -> String {
 fn access_denied(error: &Error) -> bool {
     let code = error.code().0 as u32;
     code == 5 || code == 0x8007_0005
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ListedWindow, dirty_windows};
+
+    fn windows(items: &[(&str, &str)]) -> Vec<ListedWindow> {
+        items
+            .iter()
+            .map(|(hwnd, title)| ListedWindow {
+                hwnd: (*hwnd).to_string(),
+                process_name: String::new(),
+                title: (*title).to_string(),
+            })
+            .collect()
+    }
+
+    fn same(actual: &[String], expected: &[&str]) -> bool {
+        if actual.len() != expected.len() {
+            return false;
+        }
+        let mut left: Vec<&str> = actual.iter().map(String::as_str).collect();
+        let mut right: Vec<&str> = expected.to_vec();
+        left.sort_unstable();
+        right.sort_unstable();
+        left == right
+    }
+
+    #[test]
+    fn title_change_marks_only_that_hwnd() {
+        let previous = windows(&[("1", "Alpha"), ("2", "Beta"), ("3", "Gamma")]);
+        let next = windows(&[("1", "Alpha"), ("2", "Beta+"), ("3", "Gamma")]);
+        let dirty = dirty_windows(&previous, &next, Some("1"), Some("1"));
+        assert!(same(&dirty, &["2"]), "{dirty:?}");
+    }
+
+    #[test]
+    fn new_hwnd_is_dirty_and_a_missing_hwnd_is_not_captured() {
+        let previous = windows(&[("1", "Alpha"), ("2", "Beta")]);
+        let next = windows(&[("1", "Alpha"), ("3", "Gamma")]);
+        let dirty = dirty_windows(&previous, &next, Some("1"), Some("1"));
+        assert!(same(&dirty, &["3"]), "{dirty:?}");
+        assert!(!dirty.iter().any(|hwnd| hwnd == "2"));
+    }
+
+    #[test]
+    fn foreground_change_marks_only_a_listed_hwnd() {
+        let list = windows(&[("1", "Alpha"), ("2", "Beta"), ("3", "Gamma")]);
+        let dirty = dirty_windows(&list, &list, Some("3"), Some("1"));
+        assert!(same(&dirty, &["3"]), "{dirty:?}");
+        assert!(dirty_windows(&list, &list, Some("9"), Some("1")).is_empty());
+    }
+
+    #[test]
+    fn unchanged_inactive_windows_are_not_dirty() {
+        let previous = windows(&[("1", "Alpha"), ("2", "Beta"), ("3", "Gamma")]);
+        let next = windows(&[("1", "Alpha"), ("2", "Beta+"), ("3", "Gamma")]);
+        let dirty = dirty_windows(&previous, &next, Some("1"), Some("1"));
+        assert!(!dirty.iter().any(|hwnd| hwnd == "1" || hwnd == "3"));
+    }
+
+    #[test]
+    fn the_same_lists_and_foreground_are_empty() {
+        let list = windows(&[("1", "Alpha"), ("2", "Beta"), ("3", "Gamma")]);
+        let first = dirty_windows(&list, &list, Some("3"), Some("1"));
+        assert!(same(&first, &["3"]));
+        let second = dirty_windows(&list, &list, Some("3"), Some("3"));
+        assert!(second.is_empty(), "{second:?}");
+    }
 }

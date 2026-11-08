@@ -1,6 +1,7 @@
 import unittest
 
 from bridge.launch import cards, load_entries, parse_action, perform
+from bridge.watch import accept_action
 
 
 ENTRIES = [
@@ -58,6 +59,50 @@ class ActionTests(unittest.TestCase):
     def test_file_entry_refuses_a_missing_path(self) -> None:
         with self.assertRaises(FileNotFoundError):
             perform("open_godot", CONFIG, ENTRIES)
+
+    def test_hud_shown_does_not_call_perform(self) -> None:
+        launched: list[str] = []
+        shown: list[int] = []
+
+        def perform_fn(*args, **kwargs):
+            launched.append("launch")
+
+        def on_shown() -> None:
+            shown.append(1)
+
+        outcome = accept_action(
+            '{"protocol":"aura","type":"hud.shown"}',
+            ENTRIES,
+            CONFIG,
+            "https://example.com",
+            perform_fn,
+            on_shown,
+        )
+        self.assertEqual(outcome, "shown")
+        self.assertEqual(launched, [])
+        self.assertEqual(shown, [1])
+
+        outcome = accept_action(
+            '{"protocol":"aura","type":"hud.shown","kind":"open_godot"}',
+            ENTRIES,
+            CONFIG,
+            "",
+            perform_fn,
+            on_shown,
+        )
+        self.assertEqual(outcome, "shown")
+        self.assertEqual(launched, [])
+        self.assertEqual(shown, [1, 1])
+
+        def launch_kind(kind, config, entries, target=None):
+            launched.append(kind)
+
+        self.assertEqual(
+            accept_action('{"kind":"open_terminal"}', ENTRIES, CONFIG, "", launch_kind, on_shown),
+            "open_terminal",
+        )
+        self.assertEqual(launched, ["open_terminal"])
+        self.assertEqual(shown, [1, 1])
 
 
 if __name__ == "__main__":

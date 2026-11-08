@@ -4,7 +4,9 @@ import { listen } from "@tauri-apps/api/event";
 import DashboardStage from "./components/DashboardStage";
 import type { ActionCard, SuggestionError } from "./components/Suggestions";
 import { useDashboardLayout } from "./layout/useDashboardLayout";
+import { modelStatusLine, type ModelDiagnostics } from "./modelDiagnostics";
 import { runningInTauri } from "./tauri";
+import { openActionRequest } from "./widgets/shortcuts";
 import "./App.css";
 
 type Suggestion = {
@@ -18,6 +20,7 @@ type Suggestion = {
 type SnapshotPayload = {
   suggestion?: Suggestion | null;
   actions?: ActionCard[];
+  diagnostics?: ModelDiagnostics;
 };
 
 type HudErrorPayload = {
@@ -72,6 +75,7 @@ export default function App() {
   const [suggestedKind, setSuggestedKind] = useState<string | null>(null);
   const [reason, setReason] = useState<string | null>(null);
   const [error, setError] = useState<SuggestionError | null>(null);
+  const [diagnostics, setDiagnostics] = useState<ModelDiagnostics | null>(null);
   const actionsRef = useRef<ActionCard[]>([]);
   const holdRef = useRef(false);
   const pendingSnapshotRef = useRef<SnapshotPayload | null>(null);
@@ -182,6 +186,7 @@ export default function App() {
         setPose("closed");
         return;
       }
+      void invoke("notify_hud_shown").catch(() => undefined);
       const reversing = closingGeneration.current !== null;
       clearExit();
       if (!motionOnRef.current || reversing) {
@@ -275,6 +280,7 @@ export default function App() {
     }
     setSuggestedKind(payload.suggestion?.kind ?? null);
     setReason(payload.suggestion?.reason ?? null);
+    setDiagnostics(payload.diagnostics ?? null);
     if (!hasActions) return;
     setError((current) => {
       if (!current?.kind) return current;
@@ -301,36 +307,41 @@ export default function App() {
       return;
     }
     try {
-      await invoke("open_action", { kind });
+      await invoke("open_action", openActionRequest(kind));
     } catch (reason: unknown) {
       setError({ message: messageFrom(reason), kind });
     }
   }
 
   return (
-    <main
-      ref={dashboard.stageRef}
-      className="dashboard"
-      data-editing={dashboard.editMode ? "true" : "false"}
-      data-animations={motionOn ? "true" : "false"}
-      data-motion={pose}
-    >
-      <div className="stage-veil" aria-hidden="true" />
-      <DashboardStage
-        dashboard={dashboard}
-        actions={actions}
-        suggestedKind={suggestedKind}
-        reason={reason}
-        error={error}
-        onOpen={openAction}
-        onHoldChange={onSuggestionHold}
-        note={note}
-        onNoteChange={setNote}
-        noteOpen={noteOpen}
-        onNoteOpenChange={setNoteOpen}
-        noteError={noteError}
-        noteRef={noteRef}
-      />
-    </main>
+    <div className="hud-shell">
+      <main
+        ref={dashboard.stageRef}
+        className="dashboard"
+        data-editing={dashboard.editMode ? "true" : "false"}
+        data-animations={motionOn ? "true" : "false"}
+        data-motion={pose}
+      >
+        <div className="glass-sheet" aria-hidden="true" />
+        <div className="stage-veil" aria-hidden="true" />
+        <DashboardStage
+          dashboard={dashboard}
+          actions={actions}
+          suggestedKind={suggestedKind}
+          reason={reason}
+          error={error}
+          modelStatus={modelStatusLine(diagnostics)}
+          diagnostics={diagnostics}
+          onOpen={openAction}
+          onHoldChange={onSuggestionHold}
+          note={note}
+          onNoteChange={setNote}
+          noteOpen={noteOpen}
+          onNoteOpenChange={setNoteOpen}
+          noteError={noteError}
+          noteRef={noteRef}
+        />
+      </main>
+    </div>
   );
 }

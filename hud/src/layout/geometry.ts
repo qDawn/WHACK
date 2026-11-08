@@ -1,4 +1,4 @@
-import type { NotePlacement, Placement } from "./types";
+import type { NotePlacement } from "./types";
 
 /** CSS pixels. Snap and resize both use this grid. */
 export const GRID_PX = 24;
@@ -62,7 +62,7 @@ export function clampStagePoint(x: number, y: number, stage: StageSize): { x: nu
   };
 }
 
-export function panelFrame(panel: Placement, stage: StageSize): FrameBox {
+export function panelFrame(panel: { x: number; y: number }, stage: StageSize): FrameBox {
   return {
     left: STAGE_INSET + panel.x * stage.width,
     top: STAGE_INSET + panel.y * stage.height,

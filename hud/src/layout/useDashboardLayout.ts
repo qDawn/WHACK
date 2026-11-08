@@ -4,7 +4,6 @@ import { runningInTauri } from "../tauri";
 import { defaultLayout } from "./defaults";
 import {
   bringToFront,
-  insertWidget,
   noteCanBeVisible,
   parseLayout,
   pinShortcut,
@@ -12,21 +11,35 @@ import {
   reorderShortcut,
   resizeNote as resizeNoteDocument,
   serializeLayout,
+  setNavVisible as setNavVisibleDocument,
   setVisibility,
+  setWidgetVariant,
   unpinShortcut,
 } from "./document";
 import { STAGE_INSET, type StageSize } from "./geometry";
-import type { CatalogEntry, LayoutDocument } from "./types";
+import type { CatalogEntry, CatalogStatus, LayoutDocument } from "./types";
+import { addWidgetInstance, applyWidgetRemoval, restoreWidgetInstance } from "../widgets/library";
+import {
+  addShortcutId,
+  parseWidgetState,
+  removeShortcutId,
+  resetKeepsWidgetState,
+  serializeWidgetState,
+  shortcutRecord,
+  withShortcutRecord,
+  withVariant,
+  type WidgetStateDocument,
+} from "../widgets/shortcuts";
 
 const SAVE_MS = 300;
 
-export type CatalogStatus = "loading" | "ready" | "unavailable" | "error";
+export type { CatalogStatus };
 
 export type DashboardController = {
   stageRef: RefObject<HTMLElement | null>;
   stage: StageSize | null;
   layout: LayoutDocument | null;
-  /** Edit mode. Not stored in layout.json. Drag, resize, and shortcut rearrange read this flag. */
+  /** Edit mode. Not stored in layout.json. Drag and resize read this flag. */
   editMode: boolean;
   selectedId: string | null;
   layoutError: string | null;
@@ -45,10 +58,18 @@ export type DashboardController = {
   minimise: (id: string) => void;
   hide: (id: string) => void;
   restore: (id: string) => string | null;
+  /** Sidebar visibility. Keeps x, y, z, and shortcut pins. */
+  setNavVisible: (visible: boolean) => void;
   pin: (id: string) => void;
   unpin: (id: string) => void;
   reorderShortcut: (sourceId: string, targetId: string) => void;
   addWidget: (type: string, variant: string) => void;
+  removeWidget: (id: string, choice: "keep" | "delete") => void;
+  restoreWidget: (id: string) => void;
+  widgetState: WidgetStateDocument;
+  setShortcutVariant: (instanceId: string, variant: string) => void;
+  addShortcut: (instanceId: string, id: string) => void;
+  removeShortcut: (instanceId: string, id: string) => void;
 };
 
 function messageFrom(reason: unknown): string {
@@ -68,21 +89,12 @@ function catalogEntries(value: unknown): CatalogEntry[] {
   return next;
 }
 
-function widgetStateIsObject(text: string): boolean {
-  if (text.trim().length === 0) return false;
-  try {
-    const value: unknown = JSON.parse(text);
-    return typeof value === "object" && value !== null && !Array.isArray(value);
-  } catch {
-    return false;
-  }
-}
-
 export function useDashboardLayout(): DashboardController {
   const stageRef = useRef<HTMLElement | null>(null);
   const stageSize = useRef<StageSize | null>(null);
   const extrasRef = useRef<Record<string, unknown>>({});
   const loadedRef = useRef(false);
+  const widgetRevision = useRef(0);
   const [stage, setStage] = useState<StageSize | null>(null);
   const [layout, setLayout] = useState<LayoutDocument | null>(null);
   const [ready, setReady] = useState(false);
@@ -92,6 +104,8 @@ export function useDashboardLayout(): DashboardController {
   const [catalog, setCatalog] = useState<CatalogEntry[]>([]);
   const [catalogStatus, setCatalogStatus] = useState<CatalogStatus>(runningInTauri() ? "loading" : "unavailable");
   const [catalogError, setCatalogError] = useState<string | null>(null);
+  const [widgetState, setWidgetState] = useState<WidgetStateDocument>({});
+  const [widgetReady, setWidgetReady] = useState(false);
   const stageReady = stage !== null && stage.width >= 8 && stage.height >= 8;
 
   useEffect(() => {
@@ -131,6 +145,7 @@ export function useDashboardLayout(): DashboardController {
     if (!runningInTauri()) {
       applyDefaults();
       finish();
+      setWidgetReady(true);
       return;
     }
 
@@ -154,11 +169,18 @@ export function useDashboardLayout(): DashboardController {
 
     invoke<string>("read_widget_state")
       .then((text) => {
-        if (!active || widgetStateIsObject(text)) return;
-        return invoke("write_widget_state", { text: "{}\n" });
+        if (!active) return;
+        const parsed = parseWidgetState(text);
+        const edited = widgetRevision.current > 0;
+        setWidgetState((current) => ({ ...(parsed ?? {}), ...current }));
+        if (!parsed && !edited) return invoke("write_widget_state", { text: "{}\n" });
+        return undefined;
       })
       .catch((reason: unknown) => {
         if (active) setLayoutError(messageFrom(reason));
+      })
+      .finally(() => {
+        if (active) setWidgetReady(true);
       });
 
     invoke<unknown>("list_catalog")
@@ -189,6 +211,15 @@ export function useDashboardLayout(): DashboardController {
     return () => window.clearTimeout(timer);
   }, [layout, ready]);
 
+  useEffect(() => {
+    if (!widgetReady || !runningInTauri()) return;
+    const text = serializeWidgetState(widgetState);
+    const timer = window.setTimeout(() => {
+      invoke("write_widget_state", { text }).catch((reason: unknown) => setLayoutError(messageFrom(reason)));
+    }, SAVE_MS);
+    return () => window.clearTimeout(timer);
+  }, [widgetState, widgetReady]);
+
   function update(recipe: (current: LayoutDocument) => LayoutDocument) {
     setLayout((current) => (current ? recipe(current) : current));
   }
@@ -212,17 +243,18 @@ export function useDashboardLayout(): DashboardController {
     update((current) => ({ ...current, animations: !current.animations }));
   }
 
+  function changeWidgetState(recipe: (current: WidgetStateDocument) => WidgetStateDocument) {
+    widgetRevision.current += 1;
+    setWidgetState(recipe);
+  }
+
   function reset() {
     const measured = stageNow();
-    if (!measured) return;
+    if (!measured || !layout) return;
     setSelectedId(null);
-    setLayout((current) => {
-      const next = defaultLayout(measured, window.innerWidth, window.innerHeight);
-      if (!current) return next;
-      return { ...next, animations: current.animations };
-    });
-    if (!runningInTauri()) return;
-    invoke("write_widget_state", { text: "{}\n" }).catch((reason: unknown) => setLayoutError(messageFrom(reason)));
+    const next = resetKeepsWidgetState(layout, measured, window.innerWidth, window.innerHeight, widgetState);
+    setLayout(next.layout);
+    setWidgetState(next.widgetState);
   }
 
   function raise(id: string) {
@@ -257,11 +289,20 @@ export function useDashboardLayout(): DashboardController {
 
   function restore(id: string): string | null {
     if (!layout) return null;
+    if (id === "nav") {
+      update((current) => setNavVisibleDocument(current, true));
+      return null;
+    }
     if (id === "quick-note" && !noteCanBeVisible(layout)) {
       return "Restore another piece first. The quick note cannot be the only one showing.";
     }
     setLayout(bringToFront(setVisibility(layout, id, "visible"), id));
     return null;
+  }
+
+  function setNavVisible(visible: boolean) {
+    if (!visible) setSelectedId((current) => (current === "nav" ? null : current));
+    update((current) => setNavVisibleDocument(current, visible));
   }
 
   function pin(id: string) {
@@ -278,8 +319,58 @@ export function useDashboardLayout(): DashboardController {
 
   function addWidget(type: string, variant: string) {
     const measured = stageNow();
-    if (!measured) return;
-    update((current) => insertWidget(current, type, variant, measured) ?? current);
+    if (!measured || !layout || (runningInTauri() && !widgetReady)) return;
+    const next = addWidgetInstance(layout, widgetState, type, variant, measured);
+    if (!next) return;
+    if (next.layout !== layout) setLayout(next.layout);
+    if (next.widgetState !== widgetState) changeWidgetState(() => next.widgetState);
+  }
+
+  function removeWidget(id: string, choice: "keep" | "delete") {
+    if (!layout) return;
+    const next = applyWidgetRemoval(layout, widgetState, id, choice);
+    if (next.layout === layout && next.widgetState === widgetState) return;
+    setSelectedId((current) => (current === id ? null : current));
+    if (next.layout !== layout) setLayout(next.layout);
+    if (next.widgetState !== widgetState) changeWidgetState(() => next.widgetState);
+  }
+
+  function restoreWidget(id: string) {
+    const measured = stageNow();
+    if (!measured || !layout) return;
+    const next = restoreWidgetInstance(layout, widgetState, id, measured);
+    if (next.layout === layout) return;
+    setLayout(next.layout);
+  }
+
+  function setShortcutVariant(instanceId: string, variant: string) {
+    update((current) => setWidgetVariant(current, instanceId, variant));
+    changeWidgetState((file) => {
+      const record = shortcutRecord(file, instanceId, variant);
+      const next = withVariant(record, variant);
+      if (next === record && file[instanceId] !== undefined) return file;
+      return withShortcutRecord(file, instanceId, next);
+    });
+  }
+
+  function addShortcut(instanceId: string, id: string) {
+    changeWidgetState((file) => {
+      const variant = layout?.widgets.find((widget) => widget.id === instanceId)?.variant ?? "compact";
+      const record = shortcutRecord(file, instanceId, variant);
+      const next = addShortcutId(record, id);
+      if (next === record) return file;
+      return withShortcutRecord(file, instanceId, next);
+    });
+  }
+
+  function removeShortcut(instanceId: string, id: string) {
+    changeWidgetState((file) => {
+      const variant = layout?.widgets.find((widget) => widget.id === instanceId)?.variant ?? "compact";
+      const record = shortcutRecord(file, instanceId, variant);
+      const next = removeShortcutId(record, id);
+      if (next === record) return file;
+      return withShortcutRecord(file, instanceId, next);
+    });
   }
 
   return {
@@ -304,9 +395,16 @@ export function useDashboardLayout(): DashboardController {
     minimise,
     hide,
     restore,
+    setNavVisible,
     pin,
     unpin,
     reorderShortcut: reorder,
     addWidget,
+    removeWidget,
+    restoreWidget,
+    widgetState,
+    setShortcutVariant,
+    addShortcut,
+    removeShortcut,
   };
 }

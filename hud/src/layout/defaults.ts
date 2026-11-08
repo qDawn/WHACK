@@ -32,7 +32,7 @@ export function defaultLayout(stage: MeasuredStage, viewportWidth: number, viewp
     shortcuts: [],
     widgets: [],
     panels: {
-      nav: { x: 0, y: 0, z: 4, visibility: "visible" },
+      nav: { x: 0, y: 0, z: 4, visible: true },
       "window-stack": {
         x: clamp((NAV_WIDTH + PANEL_GAP) / width, 0, 1),
         y: 0,
@@ -56,4 +56,15 @@ export function defaultLayout(stage: MeasuredStage, viewportWidth: number, viewp
       },
     },
   };
+}
+
+/** Default arrangement, keeping the current animations toggle. */
+export function resetDashboard(
+  current: LayoutDocument,
+  stage: MeasuredStage,
+  viewportWidth: number,
+  viewportHeight: number,
+): LayoutDocument {
+  const next = defaultLayout(stage, viewportWidth, viewportHeight);
+  return { ...next, animations: current.animations };
 }

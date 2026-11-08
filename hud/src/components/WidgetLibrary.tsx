@@ -1,5 +1,8 @@
 import { useState } from "react";
+import type { WidgetInstance } from "../layout/types";
+import { libraryEntries, type LibraryRestoreRow } from "../widgets/library";
 import { widgetRegistry } from "../widgets/registry";
+import type { WidgetStateDocument } from "../widgets/shortcuts";
 
 export type HiddenPiece = {
   id: string;
@@ -8,19 +11,28 @@ export type HiddenPiece = {
 
 type WidgetLibraryProps = {
   hidden: HiddenPiece[];
-  widgets: { type: string }[];
+  widgets: readonly Pick<WidgetInstance, "id" | "type" | "variant" | "visibility">[];
+  widgetState: WidgetStateDocument;
   onAdd: (type: string, variant: string) => void;
   onRestore: (id: string) => string | null;
+  onRestoreWidget: (id: string) => void;
   onClose: () => void;
 };
 
-export default function WidgetLibrary({ hidden, widgets, onAdd, onRestore, onClose }: WidgetLibraryProps) {
+function retainedLabel(row: LibraryRestoreRow, rows: readonly LibraryRestoreRow[]): string {
+  const shared = rows.filter((item) => item.variant === row.variant).length > 1;
+  return shared ? `${row.variant} (${row.id})` : row.variant;
+}
+
+export default function WidgetLibrary({ hidden, widgets, widgetState, onAdd, onRestore, onRestoreWidget, onClose }: WidgetLibraryProps) {
   const [message, setMessage] = useState<string | null>(null);
   const [variantByType, setVariantByType] = useState<Record<string, string>>({});
 
   function restore(id: string) {
     setMessage(onRestore(id));
   }
+
+  const entries = libraryEntries(widgets, widgetState);
 
   return (
     <div className="widget-library__backdrop" onPointerDown={onClose}>
@@ -44,7 +56,9 @@ export default function WidgetLibrary({ hidden, widgets, onAdd, onRestore, onClo
           ) : (
             <div className="widget-library__cards">
               {widgetRegistry.map((entry) => {
-                const added = widgets.some((widget) => widget.type === entry.type);
+                const model = entries.find((item) => item.type === entry.type);
+                const canAdd = model?.canAdd === true;
+                const restores = model?.restores ?? [];
                 const variant = variantByType[entry.type] ?? entry.sizes[0]?.id ?? "";
                 const Preview = entry.Preview;
                 return (
@@ -54,7 +68,7 @@ export default function WidgetLibrary({ hidden, widgets, onAdd, onRestore, onClo
                     <div className="widget-library__preview">
                       <Preview />
                     </div>
-                    {entry.sizes.length > 1 ? (
+                    {canAdd && entry.sizes.length > 1 ? (
                       <div className="widget-library__sizes">
                         {entry.sizes.map((size) => (
                           <button
@@ -69,14 +83,28 @@ export default function WidgetLibrary({ hidden, widgets, onAdd, onRestore, onClo
                         ))}
                       </div>
                     ) : null}
-                    <button
-                      type="button"
-                      className="widget-library__add"
-                      disabled={added || variant.length === 0}
-                      onClick={() => onAdd(entry.type, variant)}
-                    >
-                      {added ? "Added" : "Add"}
-                    </button>
+                    {canAdd ? (
+                      <button
+                        type="button"
+                        className="widget-library__add"
+                        disabled={variant.length === 0}
+                        onClick={() => onAdd(entry.type, variant)}
+                      >
+                        Add
+                      </button>
+                    ) : null}
+                    {restores.length > 0 ? (
+                      <ul className="widget-library__retained" aria-label={`${entry.title} saved`}>
+                        {restores.map((row) => (
+                          <li key={row.id} className="widget-library__hidden-row" data-instance={row.id}>
+                            <span>{retainedLabel(row, restores)}</span>
+                            <button type="button" className="widget-library__restore" onClick={() => onRestoreWidget(row.id)}>
+                              Restore
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    ) : null}
                   </article>
                 );
               })}
