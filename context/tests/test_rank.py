@@ -9,7 +9,8 @@ ACTIONS = [
     {"kind": "focus_discord", "title": "Discord", "detail": "Discord"},
     {"kind": "open_vscode", "title": "Visual Studio Code", "detail": "Visual Studio Code"},
     {"kind": "open_firefox", "title": "Firefox", "detail": "Firefox"},
-    {"kind": "open_chrome", "title": "Chrome", "detail": "Google Chrome"},
+    {"kind": "open_edge", "title": "Edge", "detail": "Microsoft Edge"},
+    {"kind": "open_spotify", "title": "Spotify", "detail": "Spotify"},
 ]
 
 
@@ -63,22 +64,22 @@ class RankTests(unittest.TestCase):
             "frequent": [
                 {"process_name": "Godot.exe"},
                 {"process_name": "Code.exe"},
-                {"process_name": "chrome.exe"},
-                {"process_name": "firefox.exe"},
+                {"process_name": "msedge.exe"},
+                {"process_name": "Spotify.exe"},
             ],
             "recent": [{"process_name": "Discord.exe"}, {"process_name": "Godot.exe"}],
         }
         capped = [card["kind"] for card in top_cards(ACTIONS, None, history, limit=4)]
         self.assertGreater(len(capped), 3)
         self.assertLessEqual(len(capped), 4)
-        self.assertEqual(capped, ["open_godot", "open_vscode", "open_chrome", "open_firefox"])
+        self.assertEqual(capped, ["open_godot", "open_vscode", "open_edge", "open_spotify"])
 
         wider = [card["kind"] for card in top_cards(ACTIONS, None, history, limit=8)]
         self.assertGreater(len(wider), 3)
         self.assertLessEqual(len(wider), 8)
         self.assertEqual(
             wider,
-            ["open_godot", "open_vscode", "open_chrome", "open_firefox", "focus_discord"],
+            ["open_godot", "open_vscode", "open_edge", "open_spotify", "focus_discord"],
         )
 
 
